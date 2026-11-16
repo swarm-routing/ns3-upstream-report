@@ -1,87 +1,23 @@
-# RCAPA: regressions in a release of swarm-routing/ns3-upstream-report
+# RCAPA: does not apply to swarm-routing/ns3-upstream-report's own changes
 
 An **RCAPA** (root cause analysis with corrective and preventive actions) is
-the full record of one **regression in a published release** of this
-project: something that worked in a released version and broke after a
-change. A bug or change that never reached a release needs none (an
-ordinary `bug` issue is enough), and an upstream ns-3 bug is an `NS3-NNN` in
-swarm-routing/ns3-tools. The org's rule and its decision table are in
-[CONTRIBUTING.md, "RCAPA"](https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#rcapa)
-([ADR-0003](https://github.com/swarm-routing/.github/blob/main/docs/adr/0003-rcapa-for-ns3-bugs-and-released-regressions.md)).
-This page is the project's flow and its index.
+required for a regression in a **published library**: a version another
+project consumes (a swarm-core or ns3-tools release through its lock or PyPI,
+a protocol core's vcpkg port), and for every upstream ns-3 bug or
+investigation of one, which gets an `NS3-NNN` ticket in
+swarm-routing/ns3-tools first, before the bug is confirmed. A Docker image
+gets one only when its composition (its Dockerfile and what it copies in, the
+configure line, the base image) is the cause, in the repository that owns the
+Dockerfile. The rule and its decision table are in [CONTRIBUTING.md, "RCAPA"](https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#rcapa) ([ADR-0003](https://github.com/swarm-routing/.github/blob/main/docs/adr/0003-rcapa-for-ns3-bugs-and-released-regressions.md)).
 
-## The flow for this project
+**RCAPA does not apply to this repository's own changes**, because
+nothing consumes it at a version: it has no release, and what it sends out
+are reports and replies to ns-3's GitLab, each from a merged file after a
+veto window. A bug here is an ordinary `bug` issue.
 
-**Nothing is published yet**: this repository has no release, no package
-and no image. What it sends out are reports and replies to ns-3's GitLab,
-each from a merged file after a veto window; a defect in that is a process
-defect, a `PROC-NNN` in swarm-routing/ns3-tools (its RCAPAs live in
-`docs/ns3-rcapa/`). The flow below starts at this repository's first
-release; until then a bug here is an ordinary `bug` issue.
+**Where RCAPA applies instead:** a defect in how a report is carried upstream is a `PROC-NNN` RCAPA in
+swarm-routing/ns3-tools (`docs/ns3-rcapa/`); an ns-3 bug is an `NS3-NNN`
+there.
 
-| | |
-|---|---|
-| Published as | nothing yet: no `v*` tag; outbound GitLab text is covered by `PROC-NNN` in swarm-routing/ns3-tools |
-| ID prefix | `UPR-NNN` (from the first release) |
-| Ticket | an issue in swarm-routing/ns3-upstream-report, form *Regression in a release (RCAPA)*, title `[rcapa] UPR-NNN <short description>`, labels `rcapa` and `bug` |
-| Verified by | for the failing release and the last good one, each in its own worktree (`git worktree add ../upr-<tag> <tag>`), run there `go test ./...` (fixtures, fake GitHub and GitLab), then `go run ./cmd/upstream validate` (that tree's `tracked.toml`) and `go run ./cmd/upstream lint` (its `reports/` and `replies/`) |
-| Corrective action | the fix PR with a Go test on the fixtures that fails without it; then a release |
-| Preventive action | a guard or a test in `internal/` (fixtures in `internal/fake/testdata/`) |
-| Closes when | the fix is merged **and** a release carries it |
-
-```mermaid
-sequenceDiagram
-    participant U as Reporter
-    participant T as RCAPA ticket
-    participant S as the Go tests
-    participant M as main
-    participant R as First and later releases
-    U->>T: a released version misbehaves
-    T->>S: reproduce on a fixture
-    T->>M: fix with that fixture
-    M->>R: release carries the fix
-    R->>T: tag recorded, ticket closed
-```
-
-## Index
-
-| ID | RCAPA | RCAPA ticket | Fixed in |
-|----|-------|--------------|----------|
-
-## Adding one: the ticket first
-
-1. Open the RCAPA ticket (the table above). `NNN` is the next free number in
-   the index.
-2. Copy [`_template.md`](_template.md) to `rcapa-<short-description>.md`
-   (lowercase, hyphens: what breaks, not where it was found), and add its row
-   to the index in the same pull request.
-3. The ticket stays open until the corrective action is merged **and a
-   release carries the fix**; record that release in the index.
-
-## What an RCAPA answers
-
-1. **What broke, in which release, and who did it touch?** The symptom, the
-   releases that fail and the last that passes, the users, numbers or
-   downstream pins it affects.
-2. **How do I see it myself?** Exact commands, the release or commit, an
-   image by tag and digest when one is involved, seeds, expected against
-   actual.
-3. **Why did it happen, and why did our checks let it into a release?** Five
-   whys, each citing its evidence: a source line at a named commit, a log, a
-   run, a comment. An answer without a source is a hypothesis and says so.
-4. **What does it look like?** Mermaid diagrams: the failing call chain, the
-   types or components involved.
-5. **What did we do about it?** Corrective actions (the fix, its PR, the
-   release that carries it) and preventive actions (the test or check that
-   catches a recurrence). An action not done yet is an open issue, linked.
-6. **When?** A dated timeline and every link.
-
-## Writing one
-
-- Every issue and PR reference is fully qualified: `swarm-routing/<repo>#N`,
-  also for this repository's own items; an ns-3 item is a link whose text is
-  `nsnam/ns-3-dev#N` to its full gitlab.com URL. Never a bare number with a
-  hash. In a mermaid block, which cannot hold a hash, name the item in words.
-- Mermaid: no HTML entities inside a block; write template arguments as
-  words.
-- An RCAPA is never deleted. Later findings update its status and timeline.
+The "open RCAPA" badge in the README counts this repository's open issues
+labelled `rcapa`, so it reads 0 here.
