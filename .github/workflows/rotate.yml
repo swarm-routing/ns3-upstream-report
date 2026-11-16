@@ -1,0 +1,63 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: rotate
+
+# P7 credentials (cmd/upstream rotate; docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md, D5):
+# the one GitLab token (scope `api`, GITLAB_TOKEN in gitlab-read and gitlab-write) is
+# rotated once it is 60 days old, or expires within 14 days, with GitLab's
+# self-rotation (POST /personal_access_tokens/self/rotate, which revokes the old one),
+# with a 90-day expiry, and stored in both environments with the org App's token (a
+# sealed box for each environment's public key). The weekly run is the 60-day cadence's
+# clock. The App's access is checked first (each environment's public key, then the
+# current token written back), so nothing is rotated that could not be stored; a missing
+# permission or any failure opens an issue. read warns 30 days before the token expires.
+on:
+  schedule:
+    - cron: '29 4 * * 3'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Check only; rotate and store nothing
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: upstream-rotate
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: gitlab-write
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # only GitHub's own actions and the org's and this repository's in a job that holds the GitLab token
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
+      # the App's token only (no personal fallback): it stores the environment secrets
+      - id: app
+        uses: swarm-routing/.github/.github/actions/bot-token@c42e1e3f377099c980f04cee9a9148a344dd876e # main 2026-11-16
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+      - name: Rotate and store
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            upstream rotate --dry-run
+          else
+            upstream rotate
+          fi

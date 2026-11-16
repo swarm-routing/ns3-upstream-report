@@ -34,8 +34,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - id: m
-        run: python3 -I tools/upstream/upstream.py verify-matrix
+        run: upstream verify-matrix
+      # the verify jobs run in the ns3-dev image, which has no Go: they take this static binary
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upstream-tool
+          path: ${{ runner.temp }}/bin/upstream
+          retention-days: 1
 
   verify:
     needs: matrix
@@ -54,6 +63,10 @@ jobs:
         with:
           persist-credentials: false
           path: bridge
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upstream-tool
+          path: /tmp/upstream-bin
       - name: Clone ns-3-dev master
         timeout-minutes: 10
         run: git clone -q --depth 1 https://gitlab.com/nsnam/ns-3-dev.git /tmp/ns-3-dev
@@ -61,8 +74,8 @@ jobs:
         env:
           ITEM: ${{ matrix.item }}
         run: |
-          python3 -I bridge/tools/upstream/upstream.py verify --tracked bridge/tracked.toml \
-            "$ITEM" --ns3 /tmp/ns-3-dev
+          chmod +x /tmp/upstream-bin/upstream
+          /tmp/upstream-bin/upstream verify --tracked bridge/tracked.toml "$ITEM" --ns3 /tmp/ns-3-dev
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -82,6 +95,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: verify-*
@@ -93,4 +109,4 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p results
-          python3 -I tools/upstream/upstream.py verify-record --results results --run-url "$RUN_URL"
+          upstream verify-record --results results --run-url "$RUN_URL"

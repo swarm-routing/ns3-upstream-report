@@ -1,6 +1,6 @@
 # 0002. A zero-manual pipeline to ns-3's GitLab
 
-- **Status:** accepted
+- **Status:** accepted; its token scopes, D3 (the push of a resolved branch) and the tool's language superseded by [0003](0003-the-bridge-is-go.md)
 - **Date:** 2026-11-16
 - **Issue:** #2 (decisions D1 to D5: https://github.com/swarm-routing/ns3-upstream-report/issues/2#issuecomment-6917989105)
 

@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 name: CI
 
-# tools/ passes ruff and its self-test (fixtures of nsnam/ns-3-dev's public
-# GitLab pages, a fake GitHub and a fake GitLab: no token, no network) under
-# coverage (report-only); the workflows pass actionlint and tracked.toml
-# validates. Licence headers and the org-sync drift check run in their own
-# workflows (licence.yml, org-sync.yml).
+# The Go tool (cmd/upstream, internal/) passes the org's Go checks
+# (reusable-go-ci.yml: build, gofmt, vet, staticcheck, govulncheck, go test -race
+# against the fixtures, a fake GitHub and a fake GitLab: no token, no network), its
+# coverage goes to Codecov (report-only); the workflows pass actionlint, tracked.toml
+# validates, reports/ and replies/ pass the outbound guards, and the Python tool
+# (tools/upstream/, until it is removed) passes ruff and its self-test, and the port's
+# byte-identical proof against it. Licence headers and the org-sync drift check run in
+# their own workflows (licence.yml, org-sync.yml).
 on:
   push:
     branches: [main]
@@ -29,10 +32,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - name: tracked.toml validates; reports/ and replies/ pass the outbound guards
         run: |
-          python3 -I tools/upstream/upstream.py validate
-          python3 -I tools/upstream/upstream.py lint
+          upstream validate
+          upstream lint
+      - name: The Go port's output is the Python tool's (tools/upstream/proof)
+        timeout-minutes: 5
+        env:
+          GOTOOLCHAIN: local
+        run: tools/upstream/proof/proof.sh
       - name: actionlint
         timeout-minutes: 5  # one download (org CONTRIBUTING invariant 5)
         env:
@@ -45,6 +56,20 @@ jobs:
           echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+
+  go:
+    uses: swarm-routing/.github/.github/workflows/reusable-go-ci.yml@main
+
+  codecov:
+    needs: go
+    if: always() && needs.go.result != 'skipped'
+    permissions:
+      contents: read
+      id-token: write
+    uses: swarm-routing/.github/.github/workflows/reusable-codecov.yml@main
+    with:
+      artifact: go-coverage
+      flags: go
 
   python:
     uses: swarm-routing/.github/.github/workflows/reusable-python-ci.yml@main

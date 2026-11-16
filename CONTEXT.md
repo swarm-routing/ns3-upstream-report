@@ -7,10 +7,11 @@ section a task needs, not the whole file.
 ## Current state
 
 2026-11-16: the maintainer decided a zero-manual design (#2, D1–D5 accepted;
-ADR-0002). `read.yml` runs every 6 h without a token; `send.yml` plans and
-sends merged reports and replies after the veto window, once the
-maintainer has stored the GitLab tokens. P1 verify, P5 MR maintenance, P6
-lifecycle and P7 rotation are being built. Tracked: NS3-003
+ADR-0002) and one GitLab token (scope `api`) for read and write; the
+pipelines moved from Python to one Go tool, `cmd/upstream` (ADR-0003).
+`read.yml` runs every 6 h; `send.yml` plans and sends merged reports and
+replies after the veto window; `verify.yml` (P1), `maintain.yml` (P5),
+`lifecycle.yml` (P6) and `rotate.yml` (P7) run on their schedules. Tracked: NS3-003
 (https://gitlab.com/nsnam/ns-3-dev/-/issues/1364,
 https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985, competing
 https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011; RCAPA ticket
@@ -29,5 +30,7 @@ swarm-routing/ns3-tools#239), not filed yet (swarm-routing/.github#519).
   its sending (24 h, 48 h for a new issue); the `hold` label stops it.
 - **Plan / send**: the two jobs of `send.yml`; the first has no secret and
   schedules, the second holds the token and posts what is due.
+- **Write client**: `internal/gitlabwrite`, the only code that writes to
+  GitLab, imported only by send, maintain and rotate.
 
 ## Open questions

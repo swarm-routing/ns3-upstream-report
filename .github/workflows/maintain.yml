@@ -1,0 +1,64 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: maintain
+
+# P5 MR maintenance (cmd/upstream maintain; docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md),
+# daily, on the open merge requests of tracked.toml authored by our accounts:
+# need_rebase -> GitLab's rebase API (PUT .../merge_requests/:iid/rebase), announced on
+# the mirror ticket and sent after the 24 h veto window (`hold` stops it), once per head;
+# a conflict -> a pull request here with the merge request's series in
+# patches/NS3-NNN/<mr>/ (its commit with `Assisted-by: Claude`), opened with the org
+# bot's token. The token has scope `api` only, without `write_repository` (maintainer
+# decision 2026-11-16), so the bridge never pushes to GitLab and a conflict stops at that
+# pull request; no reviewer 7 days after our last note -> the fixed review request, at
+# most once per 30 days, behind the window and the rate limits. Environment gitlab-write.
+on:
+  schedule:
+    - cron: '13 7 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Plan only; print the writes instead of making them
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: upstream-maintain
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: gitlab-write
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # only GitHub's own actions and the org's and this repository's in a job that holds the GitLab token
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
+      - id: bot
+        uses: swarm-routing/.github/.github/actions/bot-token@c42e1e3f377099c980f04cee9a9148a344dd876e # main 2026-11-16
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.ORG_BOT_TOKEN }}
+      - name: Rebase, request review, open conflict pull requests
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          BOT_TOKEN: ${{ steps.bot.outputs.token }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            upstream maintain --dry-run
+          else
+            upstream maintain
+          fi

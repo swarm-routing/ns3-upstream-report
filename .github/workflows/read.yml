@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 name: read
 
-# Mirrors ns-3's GitLab into the mirror tickets (tools/upstream/upstream.py read):
-# every tracked issue's and merge request's state into the ticket's status
-# block, every new GitLab note as a comment, stalls flagged. Environment
-# gitlab-read (main only, no reviewer): its GITLAB_TOKEN (read_api) is
-# optional; without it the reader uses GitLab's public pages.
+# P2 read (cmd/upstream read): every tracked issue's and merge request's state
+# into the mirror ticket's status block, every new GitLab note as a comment,
+# stalls flagged; with the token, an issue 30 days before it expires.
+# Environment gitlab-read (main only, no reviewer) holds GITLAB_TOKEN (the
+# one `api` token, maintainer decision 2026-11-16); read is built from
+# packages with no GitLab write client (internal/gitlabwrite), so it sends GET
+# only. Without the token it reads GitLab's public pages.
 on:
   schedule:
     - cron: '41 */6 * * *'
@@ -32,10 +34,13 @@ jobs:
       contents: read
       issues: write
     steps:
-      # no third-party action in a job that holds the GitLab token
+      # only GitHub's own actions and this repository's in a job that holds the GitLab token
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - name: Mirror GitLab into the tickets
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -43,7 +48,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
         run: |
           if [ "$DRY_RUN" = true ]; then
-            python3 -I tools/upstream/upstream.py read --dry-run
+            upstream read --dry-run
           else
-            python3 -I tools/upstream/upstream.py read
+            upstream read
           fi
