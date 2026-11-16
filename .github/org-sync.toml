@@ -1,0 +1,70 @@
+# org-sync configuration (swarm-routing/.github tools/org-sync).
+kind = "python"
+title = "ns3-upstream-report"
+dual = ["tools/"]
+python = "3.11"
+# the org's issue forms, copied: this repository has its own form (upstream-report.yml)
+forms = true
+posture = "the org's bridge to ns-3's GitLab: a stdlib Python tool and three workflows, no simulation code"
+description = """
+The bridge between the swarm-routing org and ns-3's GitLab
+(`nsnam/ns-3-dev`). Each upstream report the org files (an ns-3 bug with an
+`NS3-NNN` id and an RCAPA in swarm-routing/ns3-tools) has a **mirror ticket**
+here. Three workflows connect the ticket with GitLab: **read** (every 6 h)
+mirrors the GitLab issue's and merge requests' notes and state into the
+ticket and flags stalls; **publish** (`/publish`) files the report; **reply**
+(`/upstream own|assisted`) sends one comment as a GitLab note. The two that
+write to GitLab wait for the maintainer's approval of the `gitlab-write`
+environment, which holds the GitLab token."""
+trust_boundary = """
+Two inputs are untrusted. **GitLab notes** (anyone on gitlab.com can write
+one) are quoted into mirror-ticket comments by `tools/upstream/upstream.py`:
+it never executes them, neutralises hidden-comment markers, `@mentions` and
+`#N` links before quoting, and reads its own dedupe markers only from the
+first line of comments the workflow's bot account wrote. **Issue comments**
+(anyone with a GitHub account can comment on a public issue) trigger the
+publish and reply workflows: those run the tool from `main` only (never code
+from a pull request), act only on the mirror tickets of items in
+`tracked.toml` on `main`, read the comment through the API (never through an
+interpolated `${{ }}` expression), and send nothing to GitLab before the
+maintainer approves the `gitlab-write` deployment, after which the text is
+read again and must match the sha256 shown for approval. The author check
+(owner, member, collaborator) only filters noise: agents act on GitHub as the
+maintainer's own account, so the deployment approval is the gate
+(docs/adr/0002-the-deployment-approval-is-the-gate.md)."""
+limitations = """
+- **The approval is the only gate.** Whoever can approve a `gitlab-write`
+  deployment can send text to ns-3 as the maintainer. Only the maintainer is
+  a reviewer, and agents never approve a deployment (org rule).
+- **The read token is readable by the read job.** `gitlab-read`'s token is
+  exposed to the code on `main` that the scheduled job runs; give it
+  `read_api` only.
+- **Text is sent as written.** The bridge does not check what a report or a
+  reply says; the approver reads it in the gate job's summary first."""
+verifying = """
+Nothing is released: the workflows run from `main`. A sent note or issue is
+linked back on its mirror ticket, in a comment whose first line is an
+`upstream-sent` marker, and the run that sent it shows the approval."""
+
+[docs]
+arena_id = ""  # its id in swarm-routing.github.io site/hub/projects.json, once listed
+
+[settings]
+# GitHub settings as code: swarm-routing/.github tools/repo-settings (swarm-routing/.github#117).
+description = "The swarm-routing org's bridge to ns-3's GitLab: mirror tickets for upstream ns-3 bug reports, GitLab notes and state mirrored every 6 h, reports and replies sent only after the maintainer approves the gitlab-write environment."
+homepage = ""
+topics = ["ns-3", "gitlab", "issue-tracking", "automation", "swarm-intelligence"]
+ruleset = "tooling"
+required_checks = ["python / python", "workflows", "headers / licence", "check / org-sync", "title / title", "review / coderabbit"]
+# Merge through a merge queue (swarm-routing/.github#130); every workflow behind a required
+# check also runs on merge_group.
+merge_queue = true
+
+# The GitLab token lives in these environments, never in a repository secret
+# (docs/adr/0002-the-deployment-approval-is-the-gate.md). The maintainer stores it.
+[settings.environments.gitlab-read]
+branches = ["main"]
+
+[settings.environments.gitlab-write]
+reviewers = ["danieljoppi"]
+branches = ["main"]

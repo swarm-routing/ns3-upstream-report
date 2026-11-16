@@ -1,0 +1,57 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: Upstream report (mirror ticket)
+description: The mirror ticket of one report to ns-3's GitLab (nsnam/ns-3-dev). It holds the final text; `/publish` files it after the maintainer approves.
+title: "[upstream] NS3-NNN "
+labels: ["rcapa", "ns3"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One ticket per `NS3-NNN` bug of swarm-routing/ns3-tools `docs/ns3-bugs.md`. Nothing is sent from a ticket until its item is in `tracked.toml` on `main` (add `mirror = <this issue's number>` in a pull request).
+        Then `/publish` (alone in a comment) files the **Report text** below, and `/upstream own` or `/upstream assisted` on the first line of a comment sends the lines after it as a GitLab note. Both wait for the maintainer to approve the `gitlab-write` deployment; the run's summary shows the exact text first.
+        An agent may draft text here or in a comment, but never comments `/publish` or `/upstream` itself (README "Security").
+  - type: input
+    id: ns3-id
+    attributes:
+      label: NS3 id
+      description: The register's id, e.g. NS3-004.
+    validations:
+      required: true
+  - type: input
+    id: rcapa
+    attributes:
+      label: RCAPA ticket
+      description: The RCAPA ticket in swarm-routing/ns3-tools, as `swarm-routing/ns3-tools#N`. Link this ticket back from it.
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: GitLab target
+      description: "`new issue`, or an existing `nsnam/ns-3-dev#N` (issue) or `nsnam/ns-3-dev!N` (merge request) to add the text to as a note."
+      value: new issue
+    validations:
+      required: true
+  - type: input
+    id: gitlab-title
+    attributes:
+      label: GitLab title
+      description: The GitLab issue's title (used only for a new issue).
+  - type: textarea
+    id: report
+    attributes:
+      label: Report text
+      description: The exact Markdown to send, as ns-3's issue template asks for it. Edit it until it is final; `/publish` sends what is here when it runs, and refuses if it changes after the approval was requested.
+    validations:
+      required: true
+  - type: dropdown
+    id: author
+    attributes:
+      label: Who wrote the report text
+      description: ns-3 asks for AI assistance to be disclosed (nsnam/ns-3-dev!2985). The second choice appends the disclosure line (docs/adr/0003-disclosure-on-relayed-text.md).
+      options:
+        - I wrote it
+        - An AI assistant drafted it; I reviewed it
+    validations:
+      required: true

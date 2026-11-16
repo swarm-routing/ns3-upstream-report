@@ -1,0 +1,10 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+blank_issues_enabled: true
+contact_links:
+  - name: ns-3 bug register and RCAPAs
+    url: https://github.com/swarm-routing/ns3-tools/blob/main/docs/ns3-bugs.md
+    about: The NS3-NNN index and the root cause analyses live in swarm-routing/ns3-tools; open the RCAPA ticket there first.
+  - name: Issue and label conventions
+    url: https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#issues
+    about: Body shape (Context, Scope, Acceptance criteria, Depends on, References) and the type / area / model / priority labels.
