@@ -1,0 +1,82 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: send
+
+# P3 publish and P4 reply (tools/upstream/upstream.py plan, send): the text
+# comes only from merged files, reports/NS3-NNN.md (a new GitLab issue) and
+# replies/NS3-NNN/<note-id>.md (a note in that note's thread). The plan job
+# has no secret: it checks every post against the guards (references,
+# disclosure footer, scope, rate limits, fresh P1 verify evidence), comments
+# the exact text and its due time on the mirror ticket (the veto window:
+# 48 h for a new issue, 24 h for a note; the `hold` label stops it), and says
+# whether anything is due. Only then the send job runs, in environment
+# gitlab-write (main only), recomputes the plan and posts what is due
+# (docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md).
+on:
+  schedule:
+    - cron: '23 * * * *'
+  push:
+    branches: [main]
+    paths: ['reports/**', 'replies/**', 'tracked.toml']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Plan and send nothing; print the writes instead
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: upstream-send
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        timeout-minutes: 2  # its download and start take seconds (swarm-routing/.github#164)
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        name: Check the guards, schedule, say what is due
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            python3 -I tools/upstream/upstream.py plan --dry-run
+          else
+            python3 -I tools/upstream/upstream.py plan
+          fi
+
+  send:
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: gitlab-write
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # no third-party action in a job that holds the GitLab token
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Post what is due, link it back
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: python3 -I tools/upstream/upstream.py send

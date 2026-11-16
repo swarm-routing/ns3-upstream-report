@@ -13,29 +13,27 @@ so in one line. -->
 Two inputs are untrusted. **GitLab notes** (anyone on gitlab.com can write
 one) are quoted into mirror-ticket comments by `tools/upstream/upstream.py`:
 it never executes them, neutralises hidden-comment markers, `@mentions` and
-`#N` links before quoting, and reads its own dedupe markers only from the
-first line of comments the workflow's bot account wrote. **Issue comments**
-(anyone with a GitHub account can comment on a public issue) trigger the
-publish and reply workflows: those run the tool from `main` only (never code
-from a pull request), act only on the mirror tickets of items in
-`tracked.toml` on `main`, read the comment through the API (never through an
-interpolated `${{ }}` expression), and send nothing to GitLab before the
-maintainer approves the `gitlab-write` deployment, after which the text is
-read again and must match the sha256 shown for approval. The author check
-(owner, member, collaborator) only filters noise: agents act on GitHub as the
-maintainer's own account, so the deployment approval is the gate
-(docs/adr/0002-the-deployment-approval-is-the-gate.md).
+`#N` links before quoting, and reads its own markers only from the first line
+of comments the workflow's bot wrote. **Text bound for GitLab** comes only
+from files merged to `main` (`reports/`, `replies/`), never from a comment,
+and passes the guards before every API call: references, the disclosure
+footer, the scope allowlist (`nsnam/ns-3-dev`, the item's own threads, no
+close, label, approval or merge), rate limits and fresh P1 evidence. Agents
+act on GitHub as the maintainer's own user, so no actor check or approval
+click is a control; the guards assume an agent wrote everything
+(docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md).
 
 ## Known, by-design limitations (out of scope)
 
-- **The approval is the only gate.** Whoever can approve a `gitlab-write`
-  deployment can send text to ns-3 as the maintainer. Only the maintainer is
-  a reviewer, and agents never approve a deployment (org rule).
+- **A reviewed mistake can still go out.** A text that passes its pull
+  request and the guards is sent when its veto window ends, unless someone
+  labels the ticket `hold`.
 - **The read token is readable by the read job.** `gitlab-read`'s token is
   exposed to the code on `main` that the scheduled job runs; give it
   `read_api` only.
-- **Text is sent as written.** The bridge does not check what a report or a
-  reply says; the approver reads it in the gate job's summary first.
+- **The bridge does not judge content.** It checks references, scope, rate
+  and evidence, not whether a report is right; P1 verify and the review of
+  the pull request do that.
 
 <!-- org-sync:begin reporting -->
 ## Reporting a vulnerability
@@ -49,6 +47,6 @@ best-effort basis: expect an acknowledgement within a few days, not an SLA.
 
 ## Verifying what it ships
 
-Nothing is released: the workflows run from `main`. A sent note or issue is
-linked back on its mirror ticket, in a comment whose first line is an
-`upstream-sent` marker, and the run that sent it shows the approval.
+Nothing is released: the workflows run from `main`. Every post is announced
+on its mirror ticket (an `upstream-scheduled` comment with its exact text)
+and linked back after it is sent (an `upstream-sent` comment).

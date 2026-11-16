@@ -2,8 +2,8 @@
 
 This repository is the org's bridge to ns-3's GitLab: one stdlib Python tool
 (`tools/upstream/upstream.py`), the register `tracked.toml`, and three
-workflows (read, publish, reply). A contributor usually adds an item to
-`tracked.toml`, or changes what the reader mirrors or flags.
+workflows (read, send). A contributor (usually an agent) adds an item to
+`tracked.toml`, drafts a report or a reply as a file, or changes a pipeline.
 
 ## Prerequisites
 
@@ -42,11 +42,13 @@ make test     # python3 -I tools/upstream/upstream.py --self-test
 ```
 
 The self-test covers the register's validation, the reader against the
-recorded GitLab pages of nsnam/ns-3-dev#1364, !2985 and !3011 (tokenless and
-token mode, dedupe on a second run, a new note, a hostile note, the stall
-flags, the status block, dry run), and the gate, publish and reply paths
-against a fake GitLab (refusals, the sha256 check, the disclosure line, one
-send per comment). CI runs it under coverage (`ci.yml`, job `python`).
+recorded GitLab pages of https://gitlab.com/nsnam/ns-3-dev/-/issues/1364 and
+merge requests 2985 and 3011 (tokenless and token mode, dedupe on a second
+run, a new note, a hostile note, the stall flags, the status block, dry run),
+the outbound lint, and plan and send against a fake GitLab (P1 evidence, the
+veto window, `hold`, the footer, the scope allowlist, the rate limits, one
+send per file). CI runs it under coverage (`ci.yml`, job `python`), and
+`upstream.py lint` over `reports/` and `replies/` (job `workflows`).
 
 ## Run
 
@@ -57,10 +59,9 @@ env -u GITHUB_TOKEN -u GITLAB_TOKEN python3 -I tools/upstream/upstream.py read -
 ```
 
 The real runs are the workflows: `read.yml` (every 6 h, or **Run workflow**
-with `dry_run`), `publish.yml` and `reply.yml` (a `/publish` or
-`/upstream own|assisted` comment on a mirror ticket, then the maintainer's
-approval of the `gitlab-write` deployment). Never run `read` without
-`--dry-run`, `publish` or `reply` locally.
+with `dry_run`) and `send.yml` (hourly and on a merge to `reports/`,
+`replies/` or `tracked.toml`). Never run `read`, `plan` or `send` without
+`--dry-run` locally.
 
 ## Docker and dev containers
 
@@ -87,7 +88,7 @@ actionlint .github/workflows/*.yml
 | `dco.yml` | outside contributors' sign-off | no |
 | `scorecard.yml` | OpenSSF Scorecard | no |
 | `sync-labels.yml` | the org's labels | no |
-| `read.yml`, `publish.yml`, `reply.yml` | the bridge itself (schedule, issue comments) | no |
+| `read.yml`, `send.yml` | the bridge itself (schedule, merges) | no |
 
 The required checks are the ones the `main` ruleset lists (`gh api
 repos/swarm-routing/ns3-upstream-report/rules/branches/main`). `main` merges
@@ -103,13 +104,13 @@ if that ever changes.
 
 - **`tracked.toml: …` on any command**: the register does not validate; the
   message names the item and the key.
-- **The gate job says "Not sent" in its summary**: the reason follows (not a
-  tracked mirror ticket, the draft placeholder still in Report text, a bare
-  `/upstream`, already sent). Fix it and comment again.
-- **The send job fails with "changed since the gate"**: the ticket or the
-  comment was edited after the approval was requested. Comment again; the new
-  run shows the current text.
-- **The send job waits**: it needs the maintainer's approval of the
-  `gitlab-write` deployment (Actions run page, **Review deployments**).
-- **`GITLAB_TOKEN is not set`** in a send job: the maintainer has not stored
-  the token in the `gitlab-write` environment yet.
+- **`upstream.py lint` fails on a report or reply**: the line names the file
+  and the fix (a bare `#N` becomes `nsnam/ns-3-dev#N` for an ns-3 item, or the
+  full https://github.com/swarm-routing/... URL for ours).
+- **A ticket says "Not scheduled"**: a guard failed (no fresh P1 evidence, a
+  reply to a note outside the item's threads, a reference); the comment lists
+  each one. Fix it in a new PR.
+- **A post stays "waiting" or "held"**: its window has not ended, or the
+  ticket is labelled `hold`.
+- **`GITLAB_TOKEN is not set`** in a send job: the tokens are not stored in
+  the environments yet (the one-time bootstrap).

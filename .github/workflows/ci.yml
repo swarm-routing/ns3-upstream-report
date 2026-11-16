@@ -29,8 +29,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: tracked.toml validates
-        run: python3 -I tools/upstream/upstream.py validate
+      - name: tracked.toml validates; reports/ and replies/ pass the outbound guards
+        run: |
+          python3 -I tools/upstream/upstream.py validate
+          python3 -I tools/upstream/upstream.py lint
       - name: actionlint
         timeout-minutes: 5  # one download (org CONTRIBUTING invariant 5)
         env:

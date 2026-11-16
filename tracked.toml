@@ -30,4 +30,3 @@ rcapa = "swarm-routing/ns3-tools#240"
 issue = 1364
 merge_requests = [2985]
 competing = [3011]
-reply_to = "!2985"

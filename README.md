@@ -19,62 +19,132 @@ When one is reported upstream, its **mirror ticket** here follows the GitLab
 side, and the reports and replies go out from here, each only after the
 maintainer approves it.
 
-**Status: phase 1 (2026-11-16).** The read workflow runs; publish and reply
-are written and tested against a fake GitLab, and wait for the maintainer's
-token in the `gitlab-write` environment.
+**Status (2026-11-16): the design is decided
+([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md), #2).
+P2 read runs every 6 h; P0 draft, P3 publish and P4 reply (`send.yml`) run
+with their guards; P1 verify, P5 MR maintenance, P6 lifecycle and P7
+credentials are being built (#2).** Nothing reaches GitLab until the
+maintainer has stored the GitLab tokens.
 
 ## How it works
 
-| Workflow | Trigger | Environment | What it does |
-|----------|---------|-------------|--------------|
-| [`read.yml`](.github/workflows/read.yml) | every 6 h, and on demand | `gitlab-read` (no reviewer, `main` only) | For every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none; for a published item fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request. Runs without a token (GitLab's public `discussions.json` pages) |
-| [`publish.yml`](.github/workflows/publish.yml) | a `/publish` comment on a mirror ticket | `gitlab-write` (the maintainer approves, `main` only) | Files the ticket's **Report text**: a new GitLab issue with its **GitLab title**, or a note on its **GitLab target**; posts the link back |
-| [`reply.yml`](.github/workflows/reply.yml) | a comment whose first line is `/upstream own` or `/upstream assisted` (optionally `#N` or `!N`) | `gitlab-write` | Sends the lines after the first, verbatim, as a GitLab note on the item's `reply_to` (or the reference named); posts the link back |
+Nobody operates this repository by hand. Each upstream report is a mirror
+ticket here, and pipelines carry it from the first draft to the fix shipping
+in an ns-3 release. An agent drafts every text as a pull request; CI checks
+it; a merged file is announced on its mirror ticket and goes out after a
+veto window. The maintainer appears only as the optional `hold` label and
+the one-time token bootstrap.
 
-`tracked.toml` is the register: one `[[item]]` per report (its `NS3-NNN`
-id, title, state `draft` / `published` / `closed`, RCAPA ticket, GitLab
-issue, merge requests, competing merge requests, `reply_to`, and the mirror
-ticket once known). An item enters only by a reviewed pull request, and the
-publish and reply workflows act only on mirror tickets of items listed on
-`main`. Each mirror ticket links its RCAPA ticket in swarm-routing/ns3-tools,
-and the RCAPA ticket links back.
+### Report and publish
 
-To report a new bug: open the RCAPA ticket in swarm-routing/ns3-tools first,
-then a ticket here from the **Upstream report** form, add the item (with
-`mirror = <ticket>`) to `tracked.toml` in a pull request, put the final text
-in the ticket, and comment `/publish`.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as RCAPA ticket (ns3-tools)
+    participant A as Agent (P0 draft)
+    participant B as This repository (PR and CI)
+    participant V as P1 verify (ns-3-dev master)
+    participant M as Mirror ticket
+    participant S as P3 send (gitlab-write)
+    participant G as nsnam/ns-3-dev on GitLab
+    actor H as Maintainer (optional)
+    R->>A: report needed
+    A->>B: PR with reports/NS3-NNN.md
+    B->>B: guard, references lint (CI)
+    B->>B: CodeRabbit and the review gate, then merge
+    V->>B: build master, run the reproducer, record the evidence
+    S->>S: guards, references, footer, allowlist, rate limits, verify within 7 days
+    S->>M: scheduled, the exact text, due in 48 h
+    opt veto
+        H->>M: label hold
+    end
+    S->>G: window over and no hold, create the issue with the disclosure footer
+    S->>M: sent marker and link
+    S->>R: links back to the RCAPA ticket and the register
+```
+
+### Track, reply, maintain, release
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as nsnam/ns-3-dev on GitLab
+    participant P2 as P2 read (every 6 h)
+    participant M as Mirror ticket
+    participant A as Agent (P4 draft)
+    participant B as This repository (PR and CI)
+    participant S as P4 send (gitlab-write)
+    participant P5 as P5 MR maintenance
+    participant P6 as P6 lifecycle (daily)
+    participant R as RCAPA ticket and workaround repositories
+    participant P7 as P7 token rotation
+    actor H as Maintainer (optional)
+    loop every 6 h
+        P2->>G: issue, merge requests, notes
+        P2->>M: new notes, status block, stall flags
+    end
+    M->>A: unanswered question flagged
+    A->>B: PR with replies/NS3-NNN/note-id.md, lint, review, merge
+    S->>S: guards, references, footer, allowlist, one note per thread per day
+    S->>M: scheduled, the exact text, due in 24 h
+    opt veto
+        H->>M: label hold
+    end
+    S->>G: note in that thread, with the disclosure footer
+    M->>P5: need_rebase, red pipeline or no reviewer
+    P5->>G: rebase API on our merge request only
+    P5->>B: on a conflict, a PR here, then a push with Assisted-by Claude
+    P5->>G: review request, at most once per 30 days
+    G->>P6: merge request merged
+    P6->>G: is the merge commit in a release tag
+    P6->>R: workaround issues, then the RCAPA ticket closes
+    P7->>P7: rotate the GitLab token every 60 days, store it with the org App
+    Note over H: once, create the two GitLab tokens
+```
+
+| Pipeline | Workflow | What it does |
+|----------|----------|--------------|
+| P0 draft | a pull request | an agent writes `reports/NS3-NNN.md` (first line `# <GitLab title>`) or `replies/NS3-NNN/<note-id>.md` from the RCAPA document; CI's `upstream.py lint` checks it |
+| P2 read | [`read.yml`](.github/workflows/read.yml), every 6 h | for every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none, fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request. Runs without a token (GitLab's public pages) |
+| P3 publish, P4 reply | [`send.yml`](.github/workflows/send.yml), hourly and on a merge | the plan job (no secret) checks the guards and schedules each post on its ticket with the exact text; the send job (environment `gitlab-write`) posts what is due and links it back |
+
+`tracked.toml` is the register and the allowlist: one `[[item]]` per report
+(its `NS3-NNN` id, title, state, RCAPA ticket, GitLab issue, merge requests,
+competing merge requests, mirror ticket, P1 evidence, optional `gate`), and
+the gate policy (`veto-window`, 24 h for a note, 48 h for a new issue). An
+item enters only by a reviewed pull request. Each mirror ticket links its
+RCAPA ticket in swarm-routing/ns3-tools, and the RCAPA ticket links back.
 
 ## Security
 
-- **The deployment approval is the only gate**
-  ([ADR-0002](docs/adr/0002-the-deployment-approval-is-the-gate.md)). The
-  org's agents act on GitHub as the maintainer's own account, so a check on
-  who commented cannot tell the maintainer from an agent; the workflows'
-  author check (owner, member, collaborator) only keeps strangers' comments
-  from starting runs. Nothing reaches GitLab until the maintainer approves
-  the `gitlab-write` deployment, after reading the exact text and its sha256
-  in the gate job's summary; the send job reads the text again and refuses if
-  it changed. Agents never approve a deployment.
-- **Agents never send.** An agent may draft a report in a ticket or a reply
-  as an ordinary comment; it never comments `/publish` or `/upstream`. Only
-  the maintainer turns a draft into a send.
-- **Disclosure** ([ADR-0003](docs/adr/0003-disclosure-on-relayed-text.md)).
-  ns-3's reviewers asked for AI assistance to be attributed
-  ([nsnam/ns-3-dev!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985)).
-  Every relayed text states who wrote it (the form's *Who wrote the report
-  text*; `/upstream own` or `/upstream assisted`, a bare `/upstream` is
-  refused), and the assisted ones end with an `Assisted-by:` line.
+- **Every actor may be an agent.** Agents act on GitHub as the maintainer's
+  own user, so no comment author, association or approval click can tell
+  them apart; a required reviewer would add a click, not a control. The
+  guards therefore assume an agent wrote everything
+  ([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md)).
+  A separate agent identity is swarm-routing/.github#523.
+- **Text only from merged files.** Nothing in a comment is ever sent; every
+  post was reviewed as a pull request and passed CI.
+- **Guards before every API call** (`tools/upstream/upstream.py`; a failure
+  stops the post and comments why on the ticket): references (no bare `#N`,
+  `!N` or `owner/repo#N` that GitLab would link to the wrong place; our items
+  as full GitHub URLs, ns-3 items as `nsnam/ns-3-dev#N` or a full GitLab URL),
+  the fixed disclosure footer ("Posted by swarm-routing's upstream bridge;
+  drafted with AI assistance (Claude) and checked by its CI, not written by
+  hand."), the scope allowlist (`nsnam/ns-3-dev` only, issues and notes on
+  the item's own threads, never a close, label, approval or merge), rate
+  limits (one new issue a day, one note per thread a day), and fresh P1
+  verify evidence for a new report.
+- **The veto window.** Each post is announced on its mirror ticket with its
+  exact text, 24 h ahead (48 h for a new issue); the `hold` label stops it.
 - **The token lives in the environments**, never in a repository secret:
-  `gitlab-read` (scope `read_api`, optional) and `gitlab-write` (scope
-  `api`). Both environments only deploy from `main`; both are code, in
-  `.github/org-sync.toml` `[settings.environments]`.
-- **No untrusted code runs with the token.** The comment-triggered workflows
-  run from `main` (never from a pull request; there is no fork-PR trigger),
-  read the comment through the API instead of interpolating it into a
-  script, and give each job the least permissions (`issues: write` at most).
-  Jobs holding the token use no third-party action; every action is pinned
-  by commit SHA. GitLab notes quoted here are neutralised (no hidden markers,
-  no `@mentions`, no `#N` links).
+  `gitlab-read` (`read_api`, optional) and `gitlab-write` (`api`,
+  `write_repository`), both deploying from `main` only, both code in
+  `.github/org-sync.toml`. Jobs holding the token run only `main`'s code, use
+  no third-party action, and every action is pinned by SHA; no workflow runs
+  on a fork's pull request with a secret.
+- **GitLab text is data.** Notes quoted here are neutralised (no hidden
+  markers, no `@mentions`, no `#N` links).
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and how to report a
 vulnerability.

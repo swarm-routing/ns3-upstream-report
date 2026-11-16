@@ -7,5 +7,4 @@ changes is superseded by a new ADR, not edited. Start from
 | ADR | Decision |
 |-----|----------|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions |
-| [0002](0002-the-deployment-approval-is-the-gate.md) | The deployment approval is the only gate to GitLab |
-| [0003](0003-disclosure-on-relayed-text.md) | Relayed text says whether an AI assistant drafted it |
+| [0002](0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md) | A zero-manual pipeline to ns-3's GitLab |

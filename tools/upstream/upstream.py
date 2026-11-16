@@ -5,19 +5,24 @@
 
 Usage:
   upstream.py validate [--tracked FILE]
+  upstream.py lint     [--tracked FILE] [--root DIR]
   upstream.py read     [--tracked FILE] [--dry-run] [--now ISO-8601]
-  upstream.py gate     {publish,reply} [--tracked FILE]       (reads $GITHUB_EVENT_PATH)
-  upstream.py publish  --issue N --sha256 HEX [--tracked FILE] [--dry-run]
-  upstream.py reply    --issue N --comment ID --sha256 HEX [--tracked FILE] [--dry-run]
+  upstream.py plan     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
+  upstream.py send     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
   upstream.py --self-test
 
 `tracked.toml` is the register: one `[[item]]` per upstream report, keyed by
 its NS3-NNN id (swarm-routing/ns3-tools docs/ns3-bugs.md), with its RCAPA
 ticket, its state (`draft`, `published`, `closed`), its GitLab issue and
-merge requests, and the mirror ticket here (`mirror`, once known). An item
-only enters it by a reviewed pull request to `main`, and every command below
-acts only on the tickets it names, so the file is also the allowlist of what
-can be sent upstream.
+merge requests, the mirror ticket here (`mirror`, once known), the P1 verify
+evidence (`verified = { date, master, run }`) and, optionally, its own
+`gate`. The top level sets the gate policy: `gate = "veto-window"` (default;
+a post goes out `window_hours_new_issue` = 48 h after it is scheduled for a
+new issue, `window_hours` = 24 h for a note), `"auto"` (as soon as it is
+scheduled) or `"approve"` (as soon as it is scheduled; the `gitlab-write`
+environment approves the run if it has a required reviewer). An item enters only by a
+reviewed pull request to `main`, and nothing is posted for an item not
+listed, so the file is also the allowlist.
 
 read      For every item: finds its mirror ticket (`mirror`, else an issue the
           workflow itself opened with the item's `<!-- upstream-id: … -->`
@@ -30,27 +35,26 @@ read      For every item: finds its mirror ticket (`mirror`, else an issue the
           change: no activity for 14 days, need_rebase or conflicts, no
           reviewer, an unanswered question (the last user note is not ours
           and asks something: a `?` or "please"), a competing merge request
-          mentioned. With GITLAB_TOKEN it reads notes
-          from the REST API; without it from the public `discussions.json`
-          pages, so it runs, and its tests run, without any secret.
-gate      The first job of the publish and reply workflows, without any
-          secret: checks the `/publish` or `/upstream own|assisted` comment
-          (author association, a tracked mirror ticket, the fields, not sent
-          before), writes the exact text to the run summary for the person who
-          approves the deployment, and its sha256 to $GITHUB_OUTPUT.
-publish   In the `gitlab-write` environment, after the approval: reads the
-          ticket again, refuses if the text's sha256 differs from the gate's,
-          creates the GitLab issue (or the note on the target issue or merge
-          request) and posts the link back with an `upstream-sent` marker.
-reply     The same for one `/upstream` comment: its text, verbatim, as a
-          GitLab note on the item's `reply_to` (or the reference the command
-          names), then the link back.
-
-Disclosure (ns-3's AI policy, nsnam/ns-3-dev!2985): a report whose "Who wrote
-the report text" field says an AI assistant drafted it, and a reply sent with
-`/upstream assisted`, end with DISCLOSURE. `/upstream own` sends the text as
-written; a bare `/upstream` is refused, so the choice is always made
-(docs/adr/0003-disclosure-on-relayed-text.md).
+          mentioned. With GITLAB_TOKEN it reads notes from the REST API;
+          without it from the public `discussions.json` pages, so it runs,
+          and its tests run, without any secret.
+lint      Checks every file of `reports/` and `replies/` (CI, on each PR).
+plan      Without any secret: lists what would be posted. The text comes only
+          from merged files, never from a comment: `reports/NS3-NNN.md` (its
+          first line `# <GitLab title>`) becomes a new GitLab issue, and
+          `replies/NS3-NNN/<note-id>.md` a note in the thread of that mirrored
+          note. Each post is checked by the guards (references: no bare `#N` /
+          `!N` / `owner/repo#N` that GitLab would link, ours as full GitHub
+          URLs; the DISCLOSURE footer added; scope: only the item's own issue
+          and merge requests, nsnam/ns-3-dev only; rate limits: one new issue
+          per day, one note per thread per 24 h; evidence: a report needs P1
+          verify from the last 7 days). A post that fails a guard gets one
+          "not scheduled" comment saying why; a new or changed text gets an
+          `upstream-scheduled` comment with its exact text and due time; the
+          `hold` label on the ticket stops every post of it. Writes
+          `ready=true|false` to $GITHUB_OUTPUT.
+send      In the `gitlab-write` environment: recomputes the plan and posts
+          every ready post, then links it back with an `upstream-sent` marker.
 
 GitHub is reached with GITHUB_TOKEN (the workflow's, issues: write) and
 GitLab with GITLAB_TOKEN (an environment secret; read_api for gitlab-read,
@@ -60,9 +64,7 @@ ADR-0014).
 """
 
 import argparse
-import contextlib
 import hashlib
-import io
 import json
 import os
 import re
@@ -88,25 +90,36 @@ ITEM_KEYS = (
     "issue",
     "merge_requests",
     "competing",
-    "reply_to",
     "mirror",
     "draft",
+    "verified",
+    "gate",
 )
+GATES = ("veto-window", "auto", "approve")
+ALLOWED_PROJECT = "nsnam/ns-3-dev"  # the only GitLab project the bridge writes to
+HOLD = "hold"  # the label that stops every post of a mirror ticket
+EVIDENCE_DAYS = 7  # a report needs P1 verify evidence this recent
 ID = re.compile(r"NS3-\d{3}")
 GH_REF = re.compile(r"swarm-routing/[A-Za-z0-9_.-]+#\d+")
 GL_REF = re.compile(r"(?P<project>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?(?P<kind>[#!])(?P<iid>\d+)")
+GL_URL = re.compile(
+    r"https://gitlab\.com/(?P<project>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/-/"
+    r"(?P<path>issues|work_items|merge_requests)/(?P<iid>\d+)"
+)
+# a reference GitLab would link: `#N`, `!N`, `group/project#N` (not inside a word or a path)
+OUTBOUND_REF = re.compile(
+    r"(?<![\w/.\-#!])(?P<ref>[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)?(?P<kind>[#!])(?P<n>\d+)(?!\w)"
+)
+ANY_URL = re.compile(r"https?://[^\s)\]>]+")
 STALL_DAYS = 14
 MAX_NEW_NOTES = 50  # comments one run adds per item at most; the rest come next run
 # the last upstream note asks something of us: a question mark or a request
 QUESTION = re.compile(r"\?|\bplease\b", re.I)
-TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+# every automated post ends with it (swarm-routing/ns3-upstream-report#2 guard 2; wording: D2)
 DISCLOSURE = (
-    "Assisted-by: an AI assistant (Claude Code) drafted this text; I reviewed it before sending."
+    "Posted by swarm-routing's upstream bridge; drafted with AI assistance (Claude) "
+    "and checked by its CI, not written by hand."
 )
-AUTHORS = {
-    "own": "I wrote it",
-    "assisted": "An AI assistant drafted it; I reviewed it",
-}
 STATUS_BEGIN, STATUS_END = "<!-- upstream-status:begin -->", "<!-- upstream-status:end -->"
 FOOTER = "\n\n---\n_Posted by the [upstream bridge](https://github.com/swarm-routing/ns3-upstream-report) read workflow._"
 
@@ -155,6 +168,11 @@ def validate(cfg):
         errors.append("our_accounts is not a list of GitLab usernames")
     if not isinstance(cfg.get("bot", "github-actions[bot]"), str):
         errors.append("bot is not a GitHub login")
+    if cfg.get("gate", "veto-window") not in GATES:
+        errors.append(f"gate is not one of {', '.join(GATES)}")
+    for k in ("window_hours", "window_hours_new_issue"):
+        if k in cfg and (type(cfg[k]) is not int or not 0 <= cfg[k] <= 24 * 14):
+            errors.append(f"{k} is not a number of hours from 0 to 336")
     seen = set()
     for n, it in enumerate(cfg.get("item", [])):
         where = it.get("id", f"item {n + 1}") if isinstance(it, dict) else f"item {n + 1}"
@@ -187,12 +205,19 @@ def validate(cfg):
             isinstance(x, str) and GH_REF.fullmatch(x) for x in d
         ):
             errors.append(f"{where}: draft is not a list of swarm-routing/<repo>#N")
-        if "reply_to" in it:
-            m = GL_REF.fullmatch(str(it["reply_to"]))
-            if not m or m["project"] or not ref_in_item(it, m["kind"], int(m["iid"])):
-                errors.append(
-                    f"{where}: reply_to is not one of the item's #issue or !merge request"
-                )
+        if "gate" in it and it["gate"] not in GATES:
+            errors.append(f"{where}: gate is not one of {', '.join(GATES)}")
+        v = it.get("verified", {})
+        if not isinstance(v, dict) or (
+            v
+            and not (
+                re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v.get("date", "")))
+                and isinstance(v.get("master"), str)
+                and str(v.get("run", "")).startswith("https://github.com/")
+                and set(v) <= {"date", "master", "run"}
+            )
+        ):
+            errors.append(f"{where}: verified is not {{ date = YYYY-MM-DD, master, run = URL }}")
         if it.get("state") == "published" and not (it.get("issue") or it.get("merge_requests")):
             errors.append(f"{where}: published without an issue or a merge request")
     return errors
@@ -217,21 +242,13 @@ def refs(it, extra=()):
     return out
 
 
-def default_reply_to(it, extra=()):
-    if it.get("reply_to"):
-        m = GL_REF.fullmatch(it["reply_to"])
-        return m["kind"], int(m["iid"])
-    ours = [(k, i) for k, i, mirrored in refs(it, extra) if mirrored]
-    mrs = [r for r in ours if r[0] == "!"]
-    return (mrs or ours or [None])[0]
-
-
 # --- GitLab --------------------------------------------------------------------
 
 
 class GitLab:
     def __init__(self, project, token=None, transport=http, base=GITLAB):
         self.project, self.token, self.transport, self.base = project, token, transport, base
+        self.allowed, self.dry = set(), False  # the threads notes may go to; dry run
         self.api = f"{base}/api/v4/projects/{urllib.parse.quote(project, safe='')}"
 
     def _get(self, url):
@@ -241,6 +258,17 @@ class GitLab:
         return self.transport("GET", url, headers)[1]
 
     def _post(self, url, body):
+        """The scope guard, then the write: an issue, or a note on an allowed thread, in
+        ALLOWED_PROJECT only; never a close, label, approval or merge."""
+        rel = url[len(self.api) :] if url.startswith(self.api) else url
+        m = re.fullmatch(r"/(issues|merge_requests)/(\d+)/notes", rel)
+        thread = (("#" if m.group(1) == "issues" else "!"), int(m.group(2))) if m else None
+        if self.project != ALLOWED_PROJECT or not (
+            rel == "/issues" or (thread and thread in self.allowed)
+        ):
+            raise SystemExit(f"scope: {self.project} {rel} is not a write the bridge may make")
+        if self.dry:
+            return {"iid": 0, "id": "0", "web_url": "(dry run)"}
         if not self.token:
             raise SystemExit(
                 "GITLAB_TOKEN is not set: writing to GitLab needs the gitlab-write token"
@@ -394,54 +422,74 @@ def web_url(project, kind, iid):
     return f"{GITLAB}/{project}/-/{GitLab.path(kind)}/{iid}"
 
 
-def parse_form(body):
-    """An issue form's body: {heading: value} for each `### heading` section."""
-    out, cur, lines = {}, None, []
-    for line in (body or "").split(STATUS_BEGIN)[0].splitlines():
-        m = re.match(r"^### (.+?)\s*$", line)
-        if m:
-            if cur is not None:
-                out[cur] = "\n".join(lines).strip()
-            cur, lines = m.group(1), []
-        elif cur is not None:
-            lines.append(line)
-    if cur is not None:
-        out[cur] = "\n".join(lines).strip()
-    return {k: ("" if v == "_No response_" else v) for k, v in out.items()}
+def parse_target(text, proj):
+    """(kind, iid) of a GitLab reference: its full URL, `group/project#N` or `!N`; else None."""
+    text = text.strip().rstrip("/")
+    m = GL_URL.fullmatch(text)
+    if m:
+        if m["project"] != proj:
+            return None
+        return ("!" if m["path"] == "merge_requests" else "#"), int(m["iid"])
+    m = GL_REF.fullmatch(text)
+    if m and m["project"] == proj:
+        return m["kind"], int(m["iid"])
+    return None
+
+
+def lint_outbound(text, proj):
+    """What in a text bound for GitLab would link the wrong thing there: a bare `#N` or `!N`
+    (GitLab links ns-3's issue or merge request N), `swarm-routing/<repo>#N` or any other
+    `owner/repo#N` (GitLab links a GitLab project). Ours must be full GitHub URLs; an ns-3
+    item is `nsnam/ns-3-dev#N` or its full GitLab URL. Code spans and blocks are not linked."""
+    t = re.sub(r"(?ms)^ {0,3}(```|~~~).*?^ {0,3}\1[^\n]*$", " ", text)
+    t = re.sub(r"(`+)(?:(?!\1).)+?\1", " ", t, flags=re.S)
+    t = ANY_URL.sub(" ", t)
+    problems = []
+    for m in OUTBOUND_REF.finditer(t):
+        ref, kind, n = m["ref"], m["kind"], m["n"]
+        what = f"{ref or ''}{kind}{n}"
+        if ref == proj:
+            continue
+        if ref and ref.lower().startswith("swarm-routing/"):
+            kind_path = "issues" if kind == "#" else "pull"
+            problems.append(
+                f"`{what}` links a GitLab project on GitLab: write "
+                f"https://github.com/{ref}/{kind_path}/{n} (or /pull/{n} for a pull request)"
+            )
+        elif ref:
+            problems.append(f"`{what}` links a GitLab project on GitLab: write the item's full URL")
+        else:
+            problems.append(
+                f"`{what}` links ns-3's {'issue' if kind == '#' else 'merge request'} {n} on "
+                f"GitLab: write `{proj}{kind}{n}` for an ns-3 item, or the full "
+                f"https://github.com/swarm-routing/<repo>/issues/{n} (or /pull/{n}) for ours"
+            )
+    return problems
 
 
 def ticket_body(cfg, it):
-    """A mirror ticket's body, the same sections as the upstream-report form."""
+    """A mirror ticket's body: the item's references and where its text comes from."""
     proj = cfg["gitlab_project"]
-    if it.get("issue"):
-        target = f"{proj}#{it['issue']}"
-    elif it.get("merge_requests"):
-        target = f"{proj}!{it['merge_requests'][0]}"
-    else:
-        target = "new issue"
+    gitlab = [web_url(proj, "#", it["issue"])] if it.get("issue") else []
+    gitlab += [web_url(proj, "!", m) for m in it.get("merge_requests", [])]
     if it["state"] == "draft":
         report = (
-            "Draft, not published. The text is drafted in "
+            "Draft, not published. Drafted in "
             + ", ".join(it.get("draft", []) or ["the RCAPA ticket"])
-            + ". Paste the final text here, check the fields above, then comment `/publish`."
+            + f"; it is sent from `reports/{it['id']}.md` once a pull request merges it and"
+            " P1 verify evidence is recorded."
         )
     else:
-        report = f"Published before this bridge existed: see {web_url(proj, *target_ref(target))}."
+        report = "Published before this bridge existed."
     return (
         f"{id_marker(it['id'])}\n"
         f"### NS3 id\n\n{it['id']}\n\n"
-        f"### RCAPA ticket\n\n{it.get('rcapa', '_No response_')}\n\n"
-        f"### GitLab target\n\n{target}\n\n"
-        f"### GitLab title\n\n{it['title']}\n\n"
-        f"### Report text\n\n{report}\n\n"
-        f"### Who wrote the report text\n\n{AUTHORS['assisted']}\n\n"
+        f"### RCAPA ticket\n\n{it.get('rcapa', 'none yet')}\n\n"
+        f"### GitLab\n\n" + ("\n".join(gitlab) or "nothing filed yet") + "\n\n"
+        f"### Report\n\n{report} Replies are sent from `replies/{it['id']}/<note id>.md`."
+        f" Label this ticket `{HOLD}` to stop every post of it.\n\n"
         f"{STATUS_BEGIN}\n{STATUS_END}\n"
     )
-
-
-def target_ref(target):
-    m = GL_REF.fullmatch(target.split()[-1]) if target != "new issue" else None
-    return (m["kind"], int(m["iid"])) if m else ("#", 0)
 
 
 def replace_status(body, block):
@@ -482,7 +530,7 @@ def flags_for(cfg, it, states, notes, now):
     for (kind, iid, mirrored), st in states.items():
         if st.get("state") not in ("opened", None) or not mirrored:
             continue
-        label = ref_label(kind, iid)
+        label = f"[{ref_label(kind, iid)}]({st.get('web_url') or web_url(cfg['gitlab_project'], kind, iid)})"
         user = [n for n in notes.get((kind, iid), []) if not n["system"]]
         times = [st.get("updated_at")] + [n["created_at"] for n in notes.get((kind, iid), [])]
         times = [parse_time(t) for t in times if t]
@@ -509,7 +557,8 @@ def flags_for(cfg, it, states, notes, now):
                     mentioned.add(int(m.group(1)))
     mentioned -= set(it.get("merge_requests", []))
     flags += [
-        f"competing merge request !{m}" + ("" if m in it.get("competing", []) else " (not tracked)")
+        f"competing merge request [!{m}]({web_url(cfg['gitlab_project'], '!', m)})"
+        + ("" if m in it.get("competing", []) else " (not tracked)")
         for m in sorted(mentioned)
     ]
     return flags
@@ -648,199 +697,338 @@ def cmd_read(cfg, gl, gh, now):
     return out
 
 
-# --- publish and reply ---------------------------------------------------------
-
-
-def item_for_issue(gh, cfg, number, issue=None):
-    """The tracked item whose mirror ticket is issue `number`, or None."""
-    issue = issue or gh.issue(number)
-    issues = [issue]
-    for it in cfg.get("item", []):
-        t = find_ticket(gh, cfg, it, issues) if not it.get("mirror") else None
-        if it.get("mirror") == number or (t and t["number"] == number):
-            return it
-    return None
+# --- send: reports and replies from merged files, behind the gate policy ------
 
 
 def sent_markers(cfg, comments):
+    """(value, created_at) of every `upstream-sent` marker the bot wrote."""
     bot = cfg.get("bot", "github-actions[bot]")
-    return [
-        first_line_marker(c.get("body"), "upstream-sent")
-        for c in comments
-        if (c.get("user") or {}).get("login") == bot
-        and first_line_marker(c.get("body"), "upstream-sent")
-    ]
+    out = []
+    for c in comments:
+        v = first_line_marker(c.get("body"), "upstream-sent")
+        if v and (c.get("user") or {}).get("login") == bot:
+            out.append((v, c.get("created_at", "")))
+    return out
 
 
-def publish_payload(cfg, it, issue):
-    """(kind, iid, title, text) the ticket asks to send, or raise SystemExit with why not."""
-    f = parse_form(issue.get("body"))
-    proj = cfg["gitlab_project"]
-    if f.get("NS3 id", "").strip() != it["id"]:
-        raise SystemExit(f"the ticket's NS3 id is not {it['id']}")
-    target = f.get("GitLab target", "").strip()
-    if target == "new issue":
-        kind, iid = "#", 0
-    else:
-        m = GL_REF.fullmatch(target)
-        if not m or (m["project"] or proj) != proj:
-            raise SystemExit(f"GitLab target is neither `new issue` nor {proj}#N or {proj}!N")
-        kind, iid = m["kind"], int(m["iid"])
-    title = f.get("GitLab title", "").strip()
-    if kind == "#" and iid == 0 and not title:
-        raise SystemExit("a new GitLab issue needs a GitLab title")
-    text = f.get("Report text", "").strip()
-    if not text or text.startswith("Draft, not published."):
-        raise SystemExit("the Report text is empty or still the draft placeholder")
-    who = f.get("Who wrote the report text", "").strip()
-    if who not in AUTHORS.values():
-        raise SystemExit(
-            "`Who wrote the report text` is not one of: " + " | ".join(AUTHORS.values())
-        )
-    if who == AUTHORS["assisted"]:
-        text += "\n\n---\n" + DISCLOSURE
-    return kind, iid, title, text
-
-
-def reply_payload(cfg, it, comment, extra=()):
-    """(kind, iid, text) one `/upstream` comment asks to send."""
-    body = (comment.get("body") or "").replace("\r\n", "\n")
-    first, _, rest = body.partition("\n")
-    words = first.split()
-    if not words or words[0] != "/upstream":
-        raise SystemExit("the comment does not start with /upstream")
-    if len(words) < 2 or words[1] not in AUTHORS:
-        raise SystemExit(
-            "say who wrote the text: `/upstream own` (you did) or `/upstream assisted` "
-            "(an AI assistant drafted it; the disclosure line is added)"
-        )
-    if len(words) > 3:
-        raise SystemExit("`/upstream own|assisted [#N|!N]`, then the text on the next lines")
-    if len(words) == 3:
-        m = GL_REF.fullmatch(words[2])
-        if (
-            not m
-            or m["project"]
-            or not (
-                ref_in_item(it, m["kind"], int(m["iid"])) or (m["kind"], int(m["iid"])) in extra
-            )
-        ):
-            raise SystemExit(f"{words[2]} is not one of {it['id']}'s GitLab references")
-        kind, iid = m["kind"], int(m["iid"])
-    else:
-        target = default_reply_to(it, extra)
-        if target is None:
-            raise SystemExit(f"{it['id']} has nothing on GitLab to reply to yet")
-        kind, iid = target
-    text = rest.strip()
-    if not text:
-        raise SystemExit("the text to send goes on the next lines, after `/upstream …`")
-    if words[1] == "assisted":
-        text += "\n\n---\n" + DISCLOSURE
-    return kind, iid, text
+def outbound(text):
+    """The text as it goes out: the file's text and the fixed disclosure footer."""
+    return text.strip() + "\n\n---\n" + DISCLOSURE
 
 
 def digest(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
 
 
-def cmd_gate(cfg, gh, which, event):
-    """Check the comment; returns (outputs, summary). Raises SystemExit to refuse."""
-    if event.get("action") != "created" or event.get("issue", {}).get("pull_request"):
-        raise SystemExit("not a new comment on an issue")
-    c = event["comment"]
-    if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
-        raise SystemExit("only the repository's owner, members and collaborators can send upstream")
-    n = event["issue"]["number"]
-    issue = gh.issue(n)
-    it = item_for_issue(gh, cfg, n, issue)
-    if it is None:
-        raise SystemExit(f"#{n} is not the mirror ticket of an item in tracked.toml on main")
-    comments = gh.comments(n)
-    sent = sent_markers(cfg, comments)
+def read_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def report_file(root, it):
+    return os.path.join(root, "reports", f"{it['id']}.md")
+
+
+def parse_report(text):
+    """(title, body) of reports/NS3-NNN.md: a first line `# <GitLab title>`, then the body."""
+    first, _, body = text.lstrip("﻿").partition("\n")
+    m = re.fullmatch(r"# (\S.*?)\s*", first)
+    if not m or not body.strip():
+        raise ValueError("a report starts with `# <GitLab title>`, then its body")
+    return m.group(1), body.strip()
+
+
+def reply_files(root, it):
+    """[(note id, path)] of replies/NS3-NNN/<note-id>.md, in note id order."""
+    d = os.path.join(root, "replies", it["id"])
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in sorted(os.listdir(d)):
+        m = re.fullmatch(r"(\d+)\.md", name)
+        if m:
+            out.append((m.group(1), os.path.join(d, name)))
+    return out
+
+
+def lint_files(cfg, root):
+    """Every problem of reports/ and replies/ (CI runs this on each PR)."""
     proj = cfg["gitlab_project"]
-    if which == "publish":
-        if (c.get("body") or "").strip() != "/publish":
-            raise SystemExit("the comment is not exactly /publish")
-        if any(s.startswith("publish ") for s in sent):
-            raise SystemExit(f"{it['id']} was already published from this ticket")
-        kind, iid, title, text = publish_payload(cfg, it, issue)
-        h = digest("publish", n, kind, iid, title, text)
-        where = "a new issue" if iid == 0 else f"a note on {proj}{kind}{iid}"
-        summary = f"## /publish {it['id']} as {where}\n\n" + (
-            f"**Title:** {title}\n\n" if iid == 0 else ""
-        )
-        summary += f"sha256 `{h}`\n\n````markdown\n{text}\n````\n"
-        return {"issue": str(n), "sha256": h}, summary
-    if any(s.startswith(f"comment {c['id']} ") for s in sent):
-        raise SystemExit(f"comment {c['id']} was already sent")
-    _, extra, _ = mirrored_ids(cfg, comments)
-    kind, iid, text = reply_payload(cfg, it, c, extra)
-    h = digest("reply", n, c["id"], kind, iid, text)
-    summary = f"## /upstream {it['id']}: a note on {proj}{kind}{iid}\n\nsha256 `{h}`\n\n````markdown\n{text}\n````\n"
-    return {"issue": str(n), "comment": str(c["id"]), "sha256": h}, summary
+    ids = {it["id"] for it in cfg.get("item", [])}
+    problems = []
+    for sub in ("reports", "replies"):
+        base = os.path.join(root, sub)
+        for dirpath, _, files in os.walk(base):
+            for name in sorted(files):
+                if name == "README.md" and dirpath == base:
+                    continue  # the directory's own explanation, never sent
+                path = os.path.join(dirpath, name)
+                rel = os.path.relpath(path, root)
+                text = read_file(path) or ""
+                if sub == "reports":
+                    m = re.fullmatch(r"(NS3-\d{3})\.md", name)
+                    if not m or m.group(1) not in ids or dirpath != base:
+                        problems.append(f"{rel}: not reports/<an id of tracked.toml>.md")
+                        continue
+                    try:
+                        title, body = parse_report(text)
+                    except ValueError as e:
+                        problems.append(f"{rel}: {e}")
+                        continue
+                    text = title + "\n" + body
+                else:
+                    item = os.path.basename(dirpath)
+                    if item not in ids or not re.fullmatch(r"\d+\.md", name):
+                        problems.append(f"{rel}: not replies/<an id of tracked.toml>/<note id>.md")
+                        continue
+                    if not text.strip():
+                        problems.append(f"{rel}: empty")
+                        continue
+                problems += [f"{rel}: {p}" for p in lint_outbound(text, proj)]
+                if DISCLOSURE.split(";")[0] in text:
+                    problems.append(
+                        f"{rel}: the disclosure footer is added on sending; leave it out"
+                    )
+    return problems
 
 
-def cmd_publish(cfg, gh, gl, n, sha):
-    issue = gh.issue(n)
-    it = item_for_issue(gh, cfg, n, issue)
-    if it is None:
-        raise SystemExit(f"#{n} is not a tracked mirror ticket")
-    if any(s.startswith("publish ") for s in sent_markers(cfg, gh.comments(n))):
-        raise SystemExit(f"{it['id']} was already published")
-    kind, iid, title, text = publish_payload(cfg, it, issue)
-    if digest("publish", n, kind, iid, title, text) != sha:
-        gh.add_comment(
-            n,
-            "The ticket changed after `/publish` asked for approval, so nothing was sent. "
-            "Comment `/publish` again to send the current text." + FOOTER,
-        )
-        raise SystemExit("the text changed since the gate: nothing sent")
-    proj = cfg["gitlab_project"]
-    if iid == 0:
-        new_iid, url = gl.create_issue(title, text)
-        marker = f"publish -> {proj}#{new_iid}"
-        msg = f"Published as [{proj}#{new_iid}]({url}). Add `issue = {new_iid}` to {it['id']} in tracked.toml."
-    else:
-        nid = gl.create_note(kind, iid, text)
-        url = f"{web_url(proj, kind, iid)}#note_{nid}"
-        marker = f"publish -> {proj}{kind}{iid} note {nid}"
-        msg = f"Published as [a note on {proj}{kind}{iid}]({url})."
-    print(f"{it['id']}: sent: {url}")
-    gh.add_comment(n, f"<!-- upstream-sent: {marker} -->\n{msg}{FOOTER}")
-    return url
-
-
-def cmd_reply(cfg, gh, gl, n, cid, sha):
-    issue = gh.issue(n)
-    it = item_for_issue(gh, cfg, n, issue)
-    if it is None:
-        raise SystemExit(f"#{n} is not a tracked mirror ticket")
-    c = gh.comment(cid)
-    if not (c.get("issue_url") or "").endswith(f"/issues/{n}"):
-        raise SystemExit(f"comment {cid} is not on #{n}")
-    comments = gh.comments(n)
-    if any(s.startswith(f"comment {cid} ") for s in sent_markers(cfg, comments)):
-        raise SystemExit(f"comment {cid} was already sent")
-    _, extra, _ = mirrored_ids(cfg, comments)
-    kind, iid, text = reply_payload(cfg, it, c, extra)
-    if digest("reply", n, int(cid), kind, iid, text) != sha:
-        gh.add_comment(
-            n,
-            f"Comment {cid} changed after it asked for approval, so nothing was sent. "
-            "Post the text again in a new `/upstream` comment." + FOOTER,
-        )
-        raise SystemExit("the comment changed since the gate: nothing sent")
-    proj = cfg["gitlab_project"]
-    nid = gl.create_note(kind, iid, text)
-    url = f"{web_url(proj, kind, iid)}#note_{nid}"
-    print(f"{it['id']}: sent: {url}")
-    gh.add_comment(
-        n,
-        f"<!-- upstream-sent: comment {cid} -> {proj}{kind}{iid} note {nid} -->\n"
-        f"Sent [comment]({c.get('html_url', '')}) as [a note on {proj}{kind}{iid}]({url}).{FOOTER}",
+def policy(cfg, it):
+    """(gate, window for a new issue, window for a note) of an item."""
+    gate = it.get("gate", cfg.get("gate", "veto-window"))
+    if gate != "veto-window":
+        return gate, timedelta(0), timedelta(0)
+    return (
+        gate,
+        timedelta(hours=cfg.get("window_hours_new_issue", 48)),
+        timedelta(hours=cfg.get("window_hours", 24)),
     )
-    return url
+
+
+def candidates(cfg, root, it, comments, now):
+    """What this item would post: [{key, kind, target, title, text, sha, problems}]."""
+    proj = cfg["gitlab_project"]
+    out = []
+    published = any(v.startswith("publish ") for v, _ in sent_markers(cfg, comments))
+    text = read_file(report_file(root, it))
+    if text is not None and not (it.get("issue") or published):
+        problems = []
+        try:
+            title, body = parse_report(text)
+        except ValueError as e:
+            title, body = "", ""
+            problems.append(str(e))
+        if it["state"] != "draft":
+            problems.append(f"{it['id']} is {it['state']}, not a draft: a report is filed once")
+        v = it.get("verified") or {}
+        when = v.get("date")
+        if not when or now - parse_time(f"{when}T00:00:00Z") > timedelta(days=EVIDENCE_DAYS):
+            problems.append(
+                f"no P1 verify evidence from the last {EVIDENCE_DAYS} days "
+                "(`verified = { date, master, run }` in tracked.toml)"
+            )
+        body = outbound(body)
+        problems += lint_outbound(title + "\n" + body, proj)
+        out.append(
+            {
+                "key": f"publish {it['id']}",
+                "kind": "#",
+                "target": 0,
+                "title": title,
+                "text": body,
+                "sha": digest("publish", it["id"], title, body),
+                "problems": problems,
+            }
+        )
+    threads = {}  # note id -> (kind, iid), from the read workflow's mirrored-note markers
+    bot = cfg.get("bot", "github-actions[bot]")
+    for c in comments:
+        v = first_line_marker(c.get("body"), "gitlab-note")
+        if v and (c.get("user") or {}).get("login") == bot:
+            ref, nid = v.split()
+            m = GL_REF.fullmatch(ref)
+            if m and m["project"] == proj:
+                threads[nid] = (m["kind"], int(m["iid"]))
+    sent = {v.split(" -> ")[0] for v, _ in sent_markers(cfg, comments)}
+    for nid, path in reply_files(root, it):
+        key = f"reply {it['id']}/{nid}"
+        if key in sent:
+            continue
+        body = outbound(read_file(path) or "")
+        problems = []
+        target = threads.get(nid)
+        if target is None or not ref_in_item(it, *target):
+            problems.append(f"note {nid} is not a mirrored note of {it['id']}'s own issue or MRs")
+            target = target or ("#", 0)
+        problems += lint_outbound(body, proj)
+        out.append(
+            {
+                "key": key,
+                "kind": target[0],
+                "target": target[1],
+                "title": "",
+                "text": body,
+                "sha": digest("reply", it["id"], nid, target, body),
+                "problems": problems,
+            }
+        )
+    return out
+
+
+def scheduled(cfg, comments):
+    """key -> (sha, due) of the latest `upstream-scheduled` marker per key."""
+    bot = cfg.get("bot", "github-actions[bot]")
+    out = {}
+    for c in comments:
+        v = first_line_marker(c.get("body"), "upstream-scheduled")
+        if v and (c.get("user") or {}).get("login") == bot:
+            m = re.fullmatch(r"(.+) sha=([0-9a-f]{64}) due=(\S+)", v)
+            if m:
+                out[m.group(1)] = (m.group(2), parse_time(m.group(3)))
+    return out
+
+
+def rate_limited(cand, history, now):
+    """Why a post must wait for the rate limits, or None. history: [(key, target, when)]."""
+    day = now - timedelta(hours=24)
+    if cand["key"].startswith("publish "):
+        if any(k.startswith("publish ") and t >= day for k, _, t in history):
+            return "one new issue per day"
+    target = (cand["kind"], cand["target"])
+    if any(tg == target and t >= day for _, tg, t in history):
+        return "one note per thread per 24 h"
+    return None
+
+
+def history_of(cfg, tickets):
+    """Every post the bridge made: [(key, (kind, iid), when)], from the sent markers."""
+    out = []
+    for _, comments in tickets:
+        for v, when in sent_markers(cfg, comments):
+            key, _, rest = v.partition(" -> ")
+            m = re.match(r"\S+?([#!])(\d+)", rest)
+            if m and when:
+                out.append((key, (m.group(1), int(m.group(2))), parse_time(when)))
+    return out
+
+
+def plan(cfg, gh, root, now):
+    """[(item, ticket, comments, candidate, status)] for every candidate post.
+    status: blocked, held, schedule, waiting, rate, ready."""
+    issues = gh.issues()
+    rows, tickets = [], []
+    for it in cfg.get("item", []):
+        t = find_ticket(gh, cfg, it, issues)
+        if t is None:
+            continue
+        comments = gh.comments(t["number"])
+        tickets.append((t, comments))
+        held = any(
+            (lb.get("name") if isinstance(lb, dict) else lb) == HOLD for lb in t.get("labels", [])
+        )
+        sched = scheduled(cfg, comments)
+        gate, w_issue, w_note = policy(cfg, it)
+        for cand in candidates(cfg, root, it, comments, now):
+            if cand["problems"]:
+                status = "blocked"
+            elif held:
+                status = "held"
+            elif sched.get(cand["key"], (None,))[0] != cand["sha"]:
+                status = "schedule"
+                cand["due"] = now + (w_issue if cand["key"].startswith("publish ") else w_note)
+            elif sched[cand["key"]][1] > now:
+                status = "waiting"
+                cand["due"] = sched[cand["key"]][1]
+            else:
+                status = "ready"
+            cand["gate"] = gate
+            rows.append([it, t, comments, cand, status])
+    history = history_of(cfg, tickets)
+    for row in rows:
+        if row[4] == "ready":
+            why = rate_limited(row[3], history, now)
+            if why:
+                row[4], row[3]["rate"] = "rate", why
+    return rows, history
+
+
+def cmd_plan(cfg, gh, root, now):
+    """Comment the schedule and the blocks on the tickets; returns (lines, ready?)."""
+    lines, ready = [], False
+    rows, _ = plan(cfg, gh, root, now)
+    for it, t, comments, c, status in rows:
+        n = t["number"]
+        if status == "blocked":
+            mark = f"<!-- upstream-blocked: {c['key']} sha={c['sha']} -->"
+            if not any((x.get("body") or "").startswith(mark) for x in comments):
+                gh.add_comment(
+                    n,
+                    f"{mark}\n**Not scheduled:** `{c['key']}` fails its guards:\n\n"
+                    + "\n".join(f"- {p}" for p in c["problems"])
+                    + FOOTER,
+                )
+            lines.append(f"{c['key']}: blocked: {'; '.join(c['problems'])}")
+        elif status == "schedule":
+            due = c["due"].strftime("%Y-%m-%dT%H:%M:%SZ")
+            where = (
+                "a new issue"
+                if c["target"] == 0
+                else f"a note on [{cfg['gitlab_project']}{c['kind']}{c['target']}]"
+                f"({web_url(cfg['gitlab_project'], c['kind'], c['target'])})"
+            )
+            gh.add_comment(
+                n,
+                f"<!-- upstream-scheduled: {c['key']} sha={c['sha']} due={due} -->\n"
+                f"**Scheduled:** `{c['key']}` goes out as {where} after {due} "
+                f"(gate `{c['gate']}`), unless this ticket is labelled `{HOLD}`.\n\n"
+                + (f"**Title:** {c['title']}\n\n" if c["title"] else "")
+                + f"````markdown\n{c['text']}\n````"
+                + FOOTER,
+            )
+            lines.append(f"{c['key']}: scheduled for {due}")
+            ready = ready or c["due"] <= now
+        else:
+            lines.append(f"{c['key']}: {status}" + (f" ({c['rate']})" if status == "rate" else ""))
+            ready = ready or status == "ready"
+    if not rows:
+        lines.append("nothing to send")
+    return lines, ready
+
+
+def cmd_send(cfg, gh, gl, root, now):
+    """Post every ready candidate, re-checked here, and link it back."""
+    lines = []
+    rows, history = plan(cfg, gh, root, now)
+    proj = cfg["gitlab_project"]
+    for it, t, _, c, status in rows:
+        if status == "rate":
+            lines.append(f"{c['key']}: waits ({c['rate']})")
+        if status != "ready":
+            continue
+        why = rate_limited(c, history, now)
+        if why:
+            lines.append(f"{c['key']}: waits ({why})")
+            continue
+        gl.allowed = {(k, i) for k, i, mine in refs(it) if mine}
+        if c["target"] == 0:
+            iid, url = gl.create_issue(c["title"], c["text"])
+            marker = f"{c['key']} -> {proj}#{iid}"
+            msg = (
+                f"Published as [{proj}#{iid}]({url}). "
+                f'Add `issue = {iid}` and `state = "published"` to {it["id"]} in tracked.toml.'
+            )
+            history.append((c["key"], ("#", iid), now))
+        else:
+            nid = gl.create_note(c["kind"], c["target"], c["text"])
+            url = f"{web_url(proj, c['kind'], c['target'])}#note_{nid}"
+            marker = f"{c['key']} -> {proj}{c['kind']}{c['target']} note {nid}"
+            msg = f"Sent as [a note on {proj}{c['kind']}{c['target']}]({url})."
+            history.append((c["key"], (c["kind"], c["target"]), now))
+        gh.add_comment(t["number"], f"<!-- upstream-sent: {marker} -->\n{msg}{FOOTER}")
+        lines.append(f"{c['key']}: sent: {url}")
+    return lines or ["nothing ready"]
 
 
 # --- command line --------------------------------------------------------------
@@ -868,20 +1056,14 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--self-test", action="store_true")
     sub = p.add_subparsers(dest="cmd")
-    for name in ("validate", "read", "gate", "publish", "reply"):
+    for name in ("validate", "lint", "read", "plan", "send"):
         s = sub.add_parser(name)
         s.add_argument("--tracked", default=TRACKED)
-        if name == "gate":
-            s.add_argument("which", choices=("publish", "reply"))
-        if name in ("read", "publish", "reply"):
+        if name in ("lint", "plan", "send"):
+            s.add_argument("--root", default=ROOT)
+        if name in ("read", "plan", "send"):
             s.add_argument("--dry-run", action="store_true")
-        if name == "read":
             s.add_argument("--now")
-        if name in ("publish", "reply"):
-            s.add_argument("--issue", type=int, required=True)
-            s.add_argument("--sha256", required=True)
-        if name == "reply":
-            s.add_argument("--comment", type=int, required=True)
     a = p.parse_args(argv)
     if a.self_test:
         return self_test()
@@ -892,29 +1074,27 @@ def main(argv=None):
     if a.cmd == "validate":
         print(f"tracked.toml: {len(cfg.get('item', []))} item(s), valid")
         return 0
-    gh, gl = clients(cfg, getattr(a, "dry_run", False))
+    if a.cmd == "lint":
+        problems = lint_files(cfg, a.root)
+        for x in problems:
+            print(x)
+        print(f"reports/, replies/: {len(problems)} problem(s)")
+        return 1 if problems else 0
+    gh, gl = clients(cfg, a.dry_run)
+    gl.dry = a.dry_run
+    now = parse_time(a.now) if a.now else datetime.now(timezone.utc)
     if a.cmd == "read":
-        now = parse_time(a.now) if a.now else datetime.now(timezone.utc)
-        for line in cmd_read(cfg, gl, gh, now):
-            print(line)
-        if a.dry_run:
-            print(f"dry run: {len(gh.writes)} GitHub write(s) not sent")
-        return 0
-    if a.cmd == "gate":
-        with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
-            event = json.load(f)
-        try:
-            write_output(*cmd_gate(cfg, gh, a.which, event))
-        except SystemExit as e:
-            write_output({}, f"## Not sent\n\n{e}\n")
-            raise
-        return 0
-    if a.dry_run:
-        gl.transport = lambda *x: (_ for _ in ()).throw(SystemExit("dry run: GitLab not written"))
-    if a.cmd == "publish":
-        cmd_publish(cfg, gh, gl, a.issue, a.sha256)
+        lines = cmd_read(cfg, gl, gh, now)
+    elif a.cmd == "plan":
+        lines, ready = cmd_plan(cfg, gh, a.root, now)
+        write_output({"ready": "true" if ready else "false"}, "\n".join(lines) + "\n")
+        lines = []
     else:
-        cmd_reply(cfg, gh, gl, a.issue, a.comment, a.sha256)
+        lines = cmd_send(cfg, gh, gl, a.root, now)
+    for line in lines:
+        print(line)
+    if a.dry_run:
+        print(f"dry run: {len(gh.writes)} GitHub write(s) not sent")
     return 0
 
 
@@ -946,7 +1126,6 @@ rcapa = "swarm-routing/ns3-tools#240"
 issue = 1364
 merge_requests = [2985]
 competing = [3011]
-reply_to = "!2985"
 [[item]]
 id = "NS3-001"
 title = "AODV livelock"
@@ -962,12 +1141,13 @@ draft = ["swarm-routing/ns3-containers#55"]
         ("unknown key", {"token": "x"}, "token is not one of"),
         ("bad rcapa", {"rcapa": "ns3-tools#240"}, "rcapa is not"),
         ("bad mr", {"merge_requests": ["2985"]}, "merge_requests is not"),
-        ("reply_to elsewhere", {"reply_to": "!3011"}, "reply_to is not one of"),
+        ("bad gate", {"gate": "later"}, "gate is not one of"),
+        ("bad evidence", {"verified": {"date": "yesterday"}}, "verified is not"),
         ("published with nothing", {"issue": None}, None),
     ):
         it = dict(cfg["item"][0], **{k: v for k, v in patch.items() if v is not None})
         if name == "published with nothing":
-            it = {k: v for k, v in it.items() if k not in ("issue", "merge_requests", "reply_to")}
+            it = {k: v for k, v in it.items() if k not in ("issue", "merge_requests")}
             want = "published without"
         errs = validate(dict(cfg, item=[it]))
         check(f"register refused: {name}", any(want in e for e in errs))
@@ -1016,6 +1196,7 @@ draft = ["swarm-routing/ns3-containers#55"]
     class FakeGitHub:
         def __init__(self):
             self.issues, self.comments, self.next = {}, {}, 1
+            self.clock = "2026-11-16T12:00:00Z"  # created_at of the comments it adds
             self.calls = []
 
         def transport(self, method, url, headers, body=None):
@@ -1069,6 +1250,7 @@ draft = ["swarm-routing/ns3-containers#55"]
                 "body": body,
                 "user": {"login": login},
                 "author_association": association,
+                "created_at": self.clock,
                 "issue_url": f"{GITHUB_API}/repos/o/r/issues/{n}",
                 "html_url": f"https://github.com/o/r/issues/{n}#issuecomment-{cid}",
             }
@@ -1131,11 +1313,13 @@ draft = ["swarm-routing/ns3-containers#55"]
         "stalls flagged: no activity, need_rebase, no reviewer, unanswered question, competing MR",
         len(flags) == 1
         and "no activity for 60 days" in fl
-        and "need_rebase (!2985)" in fl
-        and "no reviewer (!2985)" in fl
-        and "unanswered question (!2985, tomhenderson 2026-08-17)" in fl
-        and "(#1364" not in fl
-        and "competing merge request !3011" in fl
+        and "need_rebase ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985))" in fl
+        and "no reviewer ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985))" in fl
+        and "unanswered question ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985), tomhenderson 2026-08-17)"
+        in fl
+        and "#1364" not in fl
+        and "competing merge request [!3011](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011)"
+        in fl
         and "(not tracked)" not in fl,
     )
     check(
@@ -1148,6 +1332,22 @@ draft = ["swarm-routing/ns3-containers#55"]
     check(
         "issue links neutralised, no marker below the first line",
         not re.search(r"(?<![\w/])#\d", quoted) and "<!--" not in quoted,
+    )
+    ours = [i["body"] for i in fake.issues.values()] + [
+        c["body"] for cs in fake.comments.values() for c in cs
+    ]
+    bare = []
+    for text in ours:
+        t = re.sub(r"<!--.*?-->", " ", text)
+        t = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", t)  # link text does not autolink
+        t = ANY_URL.sub(" ", t)
+        bare += re.findall(r"(?<![\w/])#\d+", t)  # on GitHub: this repository's issue
+        bare += re.findall(r"(?<!swarm-routing)/[\w.-]+#\d+", t)  # a GitHub repository's issue
+    check("our side: every GitLab item as a full URL or a link, no bare #N", bare == [])
+    check(
+        "the ticket names its GitLab items by full URL",
+        "### GitLab\n\nhttps://gitlab.com/nsnam/ns-3-dev/-/issues/1364\n"
+        "https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985\n" in t3["body"],
     )
     nw = len([c for c in fake.calls if c[0] != "GET"])
     out2 = cmd_read(cfg, gl, gh, now)
@@ -1219,13 +1419,40 @@ draft = ["swarm-routing/ns3-containers#55"]
         all(c[0] == "GET" for c in fake3.calls) and len(gh3.writes) > 15,
     )
 
-    # gate, publish and reply against the fake GitLab
-    t1n = t1["number"]
-    issue = fake.issues[t1n]
-
-    def event(n, body, association="OWNER", login="danieljoppi"):
-        c = fake.add(n, body, login, association)
-        return {"action": "created", "issue": {"number": n}, "comment": c}
+    # outbound lint: what would link the wrong thing on GitLab
+    proj = "nsnam/ns-3-dev"
+    for text, want in (
+        ("Crash in #1364.", "`#1364` links ns-3's issue 1364"),
+        ("Fixed by !2985.", "write `nsnam/ns-3-dev!2985`"),
+        (
+            "RCAPA: swarm-routing/ns3-tools#240",
+            "https://github.com/swarm-routing/ns3-tools/issues/240",
+        ),
+        ("see danieljoppi/AntHocNet#5", "`danieljoppi/AntHocNet#5` links a GitLab project"),
+        (
+            "ours: swarm-routing/ns3-tools!248",
+            "https://github.com/swarm-routing/ns3-tools/pull/248",
+        ),
+    ):
+        got = lint_outbound(text, proj)
+        check(f"outbound lint flags: {text}", len(got) == 1 and want in got[0])
+    for text in (
+        "Same as nsnam/ns-3-dev#1364 and nsnam/ns-3-dev!2985.",
+        "https://gitlab.com/nsnam/ns-3-dev/-/issues/1364#note_3755232337",
+        "RCAPA: https://github.com/swarm-routing/ns3-tools/issues/240 (also /pull/248#issuecomment-1)",
+        "In code: `ptr#1` and\n```\nissue #12 !3\n```\nC#1, x!2, # Heading, issue#3",
+        "~~~cpp\nm[#0] = 1;\n~~~\n",
+    ):
+        check(f"outbound lint passes: {text[:30]}", lint_outbound(text, proj) == [])
+    check(
+        "a GitLab reference is its URL (issues, work items, merge requests) or the project form",
+        parse_target("https://gitlab.com/nsnam/ns-3-dev/-/work_items/1364", proj) == ("#", 1364)
+        and parse_target("https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985/", proj)
+        == ("!", 2985)
+        and parse_target("nsnam/ns-3-dev#1364", proj) == ("#", 1364)
+        and parse_target("https://gitlab.com/other/proj/-/issues/1", proj) is None
+        and parse_target("#1364", proj) is None,
+    )
 
     def refused(f, want):
         try:
@@ -1234,162 +1461,203 @@ draft = ["swarm-routing/ns3-containers#55"]
             return want in str(e)
         return False
 
-    check(
-        "publish refused while the text is the draft placeholder",
-        refused(lambda: cmd_gate(cfg, gh, "publish", event(t1n, "/publish")), "draft placeholder"),
-    )
-    issue["body"] = issue["body"].replace(
-        issue["body"].split("### Report text\n\n")[1].split("\n\n###")[0], "AODV livelocks when …"
-    )
-    check(
-        "publish refused for an outsider",
-        refused(lambda: cmd_gate(cfg, gh, "publish", event(t1n, "/publish", "NONE")), "only the"),
-    )
-    stranger = fake.transport(
-        "POST",
-        f"{GITHUB_API}/repos/o/r/issues",
-        {},
-        {"title": "x", "body": id_marker("NS3-001"), "labels": []},
-    )[1]["number"]
-    fake.issues[stranger]["user"] = {"login": "mallory"}
-    check(
-        "a marker in someone else's issue does not make it a mirror ticket",
-        refused(
-            lambda: cmd_gate(cfg, gh, "publish", event(stranger, "/publish")),
-            "not the mirror ticket",
-        ),
-    )
-    outputs, summary = cmd_gate(cfg, gh, "publish", event(t1n, "/publish"))
-    check(
-        "publish gate: the text with its disclosure in the summary, sha256 out",
-        outputs["issue"] == str(t1n)
-        and len(outputs["sha256"]) == 64
-        and "AODV livelocks when …\n\n---\n" + DISCLOSURE in summary
-        and "**Title:** AODV livelock" in summary,
-    )
-    issue["body"] = issue["body"].replace("AODV livelocks when …", "AODV livelocks when … (edited)")
-    gl_calls.clear()
-    gl_w = GitLab("nsnam/ns-3-dev", "tok", gl_transport)
-    check(
-        "publish refused when the text changed after the gate",
-        refused(lambda: cmd_publish(cfg, gh, gl_w, t1n, outputs["sha256"]), "changed")
-        and not any(c[0] == "POST" for c in gl_calls),
-    )
-    outputs, _ = cmd_gate(cfg, gh, "publish", event(t1n, "/publish"))
-    with contextlib.redirect_stdout(io.StringIO()):
-        url = cmd_publish(cfg, gh, gl_w, t1n, outputs["sha256"])
-    posted = [c for c in gl_calls if c[0] == "POST"]
-    check(
-        "publish creates the GitLab issue with the text, links back",
-        url.endswith("/issues/1400")
-        and len(posted) == 1
-        and posted[0][3]["title"] == "AODV livelock"
-        and posted[0][3]["description"].endswith(DISCLOSURE)
-        and fake.comments[t1n][-1]["body"].startswith(
-            "<!-- upstream-sent: publish -> nsnam/ns-3-dev#1400 -->"
-        ),
-    )
-    check(
-        "publish refused a second time",
-        refused(lambda: cmd_gate(cfg, gh, "publish", event(t1n, "/publish")), "already published"),
-    )
-    check(
-        "the published issue becomes a reference of the ticket",
-        default_reply_to(cfg["item"][1], mirrored_ids(cfg, fake.comments[t1n])[1]) == ("#", 1400),
-    )
-    check(
-        "publish without a token is refused before anything is sent",
-        refused(
-            lambda: GitLab("nsnam/ns-3-dev", None, gl_transport).create_issue("t", "x"),
-            "GITLAB_TOKEN",
-        ),
-    )
+    def iso(t):
+        return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    t3n = t3["number"]
-    check(
-        "a bare /upstream is refused: the author must be stated",
-        refused(
-            lambda: cmd_gate(cfg, gh, "reply", event(t3n, "/upstream\nThanks!")), "/upstream own"
-        ),
-    )
-    check(
-        "a reference outside the item is refused",
-        refused(
-            lambda: cmd_gate(cfg, gh, "reply", event(t3n, "/upstream own !1\nThanks!")),
-            "not one of",
-        ),
-    )
-    check(
-        "an empty reply is refused",
-        refused(lambda: cmd_gate(cfg, gh, "reply", event(t3n, "/upstream own\n\n")), "next lines"),
-    )
-    ev = event(t3n, "/upstream assisted\nRebased on master; attribution added to each commit.")
-    outputs, summary = cmd_gate(cfg, gh, "reply", ev)
-    check(
-        "reply gate: reply_to target, disclosure added",
-        "a note on nsnam/ns-3-dev!2985" in summary
-        and summary.count(DISCLOSURE) == 1
-        and outputs["comment"] == str(ev["comment"]["id"]),
-    )
-    gl_calls.clear()
-    with contextlib.redirect_stdout(io.StringIO()):
-        url = cmd_reply(cfg, gh, gl_w, t3n, ev["comment"]["id"], outputs["sha256"])
-    posted = [c for c in gl_calls if c[0] == "POST"]
-    check(
-        "reply posts the text verbatim plus disclosure as a note, links back",
-        len(posted) == 1
-        and posted[0][1].endswith("/merge_requests/2985/notes")
-        and posted[0][3]["body"]
-        == "Rebased on master; attribution added to each commit.\n\n---\n" + DISCLOSURE
-        and fake.comments[t3n][-1]["body"].startswith(
-            f"<!-- upstream-sent: comment {ev['comment']['id']} -> nsnam/ns-3-dev!2985 note "
-        ),
-    )
-    check(
-        "a comment is sent once",
-        refused(
-            lambda: cmd_reply(cfg, gh, gl_w, t3n, ev["comment"]["id"], outputs["sha256"]),
-            "already sent",
-        ),
-    )
-    ev2 = event(t3n, "/upstream own #1364\nThanks, Eduardo.")
-    outputs2, _ = cmd_gate(cfg, gh, "reply", ev2)
-    fake.comments[t3n][-1]["body"] = "/upstream own #1364\nThanks, Eduardo. Also: something else"
-    check(
-        "a reply edited after the gate is not sent",
-        refused(
-            lambda: cmd_reply(cfg, gh, gl_w, t3n, ev2["comment"]["id"], outputs2["sha256"]),
-            "changed",
-        ),
-    )
-    sent = first_line_marker(
-        next(c["body"] for c in fake.comments[t3n] if "upstream-sent: comment" in c["body"]),
-        "upstream-sent",
-    )
-    disc.append(
-        {
-            "notes": [
-                {
-                    "id": sent.split()[-1],
-                    "system": False,
-                    "body": "Rebased on master; attribution added to each commit.",
-                    "created_at": "2026-11-16T11:00:00.000Z",
-                    "author": {"username": "danieljoppi", "name": "Daniel"},
-                }
-            ]
+    # send: text only from merged files, the gate policy, the guards, against a fake GitLab
+    with tempfile.TemporaryDirectory() as root:
+
+        def write(rel, text):
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+
+        def remove(rel):
+            os.remove(os.path.join(root, rel))
+
+        report = "# AODV livelocks in an ICMP storm\n\nSee nsnam/ns-3-dev#1364 and https://github.com/swarm-routing/ns3-tools/issues/238.\n"
+        write("reports/NS3-001.md", report)
+        write("reports/NS3-999.md", report)
+        write("reports/NS3-003.md", "no title\n")
+        write("replies/NS3-003/3692233174.md", "Done: see #12.\n")
+        write("replies/NS3-404/1.md", "x")
+        write("replies/NS3-003/5.md", "Thanks.\n\n---\n" + DISCLOSURE)
+        lint = lint_files(cfg, root)
+        check(
+            "CI lint of reports/ and replies/: names, title, references, no hand-written footer",
+            any("reports/NS3-999.md: not reports/" in p for p in lint)
+            and any("reports/NS3-003.md: a report starts with" in p for p in lint)
+            and any("replies/NS3-003/3692233174.md: `#12`" in p for p in lint)
+            and any("replies/NS3-404/1.md: not replies/" in p for p in lint)
+            and any("replies/NS3-003/5.md: the disclosure footer is added" in p for p in lint)
+            and not any(p.startswith("reports/NS3-001.md") for p in lint),
+        )
+        for rel in ("reports/NS3-999.md", "reports/NS3-003.md", "replies/NS3-404/1.md"):
+            remove(rel)
+        remove("replies/NS3-003/5.md")
+        write("replies/NS3-003/3692233174.md", "Attribution added to each commit.\n")
+
+        gw = GitLab("nsnam/ns-3-dev", "tok", gl_transport)
+        fk = FakeGitHub()
+        g = GitHub("o/r", "t", fk.transport)
+        cmd_read(cfg, gl, g, now)  # opens the tickets, mirrors the notes
+        t1n = next(n for n, i in fk.issues.items() if "NS3-001" in i["title"])
+        t3n = next(n for n, i in fk.issues.items() if "NS3-003" in i["title"])
+
+        def posts():
+            return [c for c in gl_calls if c[0] == "POST"]
+
+        gl_calls.clear()
+        lines, ready = cmd_plan(cfg, g, root, now)
+        blocked = [c["body"] for c in fk.comments[t1n] if "upstream-blocked" in c["body"]]
+        check(
+            "a report without fresh P1 evidence is not scheduled, and the ticket says why",
+            not ready
+            and len(blocked) == 1
+            and "no P1 verify evidence from the last 7 days" in blocked[0],
+        )
+        cmd_plan(cfg, g, root, now)
+        check(
+            "the same block is commented once",
+            len([c for c in fk.comments[t1n] if "upstream-blocked" in c["body"]]) == 1,
+        )
+        cfg["item"][1]["verified"] = {
+            "date": "2026-11-15",
+            "master": "8ec9b4a1",
+            "run": "https://github.com/x/y/actions/runs/1",
         }
-    )
-    out = cmd_read(cfg, gl, gh, now)
-    check(
-        "a note we sent is not mirrored back",
-        not any("mirrored" in line for line in out if line.startswith("NS3-003")),
-    )
-    check(
-        "the comment events are matched on the first line only",
-        refused(
-            lambda: cmd_gate(cfg, gh, "publish", event(t1n, "please /publish")), "exactly /publish"
-        ),
-    )
+        check("evidence is a valid register field", validate(cfg) == [])
+        lines, ready = cmd_plan(cfg, g, root, now)
+        sch = [c["body"] for c in fk.comments[t1n] if "upstream-scheduled" in c["body"]]
+        check(
+            "veto window: a new issue is scheduled 48 h out, its exact text on the ticket",
+            not ready
+            and len(sch) == 1
+            and "due=2026-11-18T12:00:00Z" in sch[0].split("\n")[0]
+            and "**Title:** AODV livelocks in an ICMP storm" in sch[0]
+            and "````markdown\n" in sch[0]
+            and DISCLOSURE in sch[0],
+        )
+        check(
+            "the reply to a mirrored note is scheduled 24 h out",
+            any(
+                "upstream-scheduled: reply NS3-003/3692233174" in c["body"]
+                and "due=2026-11-17T12:00:00Z" in c["body"]
+                for c in fk.comments[t3n]
+            ),
+        )
+        check(
+            "nothing goes out inside the window",
+            cmd_send(cfg, g, gw, root, now) == ["nothing ready"] and posts() == [],
+        )
+        cmd_plan(cfg, g, root, now)
+        check(
+            "an unchanged text is scheduled once",
+            len([c for c in fk.comments[t1n] if "upstream-scheduled" in c["body"]]) == 1,
+        )
+        later = now + timedelta(hours=49)
+        fk.issues[t1n]["labels"] = [{"name": HOLD}]
+        lines, ready = cmd_plan(cfg, g, root, later)
+        check("the hold label stops a due post", "publish NS3-001: held" in lines)
+        fk.issues[t1n]["labels"] = []
+        lines, ready = cmd_plan(cfg, g, root, later)
+        check("after the window, with no hold: ready", ready and "publish NS3-001: ready" in lines)
+        gl_calls.clear()
+        fk.clock = iso(later)
+        out = cmd_send(cfg, g, gw, root, later)
+        created = [c for c in posts() if c[1].endswith("/issues")]
+        noted = [c for c in posts() if c[1].endswith("/notes")]
+        check(
+            "send: the issue from the merged file with the footer, the reply as a note on its thread",
+            len(created) == 1
+            and created[0][3]["title"] == "AODV livelocks in an ICMP storm"
+            and created[0][3]["description"].endswith("---\n" + DISCLOSURE)
+            and len(noted) == 1
+            and noted[0][1].endswith("/merge_requests/2985/notes")
+            and noted[0][3]["body"] == "Attribution added to each commit.\n\n---\n" + DISCLOSURE
+            and "publish NS3-001: sent: https://gitlab.com/nsnam/ns-3-dev/-/issues/1400" in out,
+        )
+        check(
+            "the links come back as sent markers",
+            fk.comments[t1n][-1]["body"].startswith(
+                "<!-- upstream-sent: publish NS3-001 -> nsnam/ns-3-dev#1400 -->"
+            )
+            and fk.comments[t3n][-1]["body"].startswith(
+                "<!-- upstream-sent: reply NS3-003/3692233174 -> nsnam/ns-3-dev!2985 note "
+            ),
+        )
+        gl_calls.clear()
+        check(
+            "nothing is sent twice",
+            cmd_send(cfg, g, gw, root, later) == ["nothing ready"] and posts() == [],
+        )
+        # a changed text restarts the window; a second reply to the same thread waits a day
+        write(
+            "replies/NS3-003/3691860433.md",
+            "We keep them queued: the update interval is shorter.\n",
+        )
+        write("replies/NS3-003/3691862748.md", "Commit messages reworded.\n")
+        lines, _ = cmd_plan(cfg, g, root, later)
+        even_later = later + timedelta(hours=25)
+        fk.clock = iso(even_later)
+        gl_calls.clear()
+        out = cmd_send(cfg, g, gw, root, even_later)
+        check(
+            "rate limit: one note per thread per 24 h",
+            len(posts()) == 1 and any("waits (one note per thread per 24 h)" in x for x in out),
+        )
+        write("replies/NS3-003/1.md", "an unknown note\n")
+        lines, _ = cmd_plan(cfg, g, root, even_later)
+        check(
+            "scope: a reply to a note not mirrored from the item's own threads is blocked",
+            any(
+                x.startswith("reply NS3-003/1: blocked: note 1 is not a mirrored note")
+                for x in lines
+            ),
+        )
+        check(
+            "scope: the GitLab client refuses a note outside the allowed threads and other projects",
+            refused(lambda: gw.create_note("!", 3011, "x"), "scope")
+            and refused(
+                lambda: GitLab("someone/else", "tok", gl_transport).create_issue("t", "x"), "scope"
+            ),
+        )
+        check(
+            "no token, no write",
+            refused(
+                lambda: GitLab("nsnam/ns-3-dev", None, gl_transport).create_issue("t", "x"),
+                "GITLAB_TOKEN",
+            ),
+        )
+        # gate "auto": scheduled and sent in the same run; one new issue per day
+        auto = dict(cfg, gate="auto")
+        auto["item"] = [dict(i) for i in cfg["item"]] + [
+            dict(
+                cfg["item"][1],
+                id="NS3-002",
+                title="socket order",
+                rcapa="swarm-routing/ns3-tools#239",
+            )
+        ]
+        check("gate is a valid register field", validate(auto) == [])
+        write("reports/NS3-002.md", "# Socket maps ordered by heap address\n\nBody.\n")
+        soon = later + timedelta(hours=2)  # NS3-001 went out 2 h ago
+        fk.clock = iso(soon)
+        cmd_read(auto, gl, g, soon)
+        lines, ready = cmd_plan(auto, g, root, soon)
+        check("gate auto: due at once", ready and any("NS3-002: scheduled" in x for x in lines))
+        gl_calls.clear()
+        out = cmd_send(auto, g, gw, root, soon)
+        check(
+            "gate auto still keeps one new issue per day",
+            not [c for c in posts() if c[1].endswith("/issues")]
+            and any("publish NS3-002: waits (one new issue per day)" in x for x in out),
+        )
+        check(
+            "an invalid gate is refused",
+            any("gate is not one of" in e for e in validate(dict(cfg, gate="sometimes"))),
+        )
 
     # the command line: validate and a dry read of the repository's own register run offline
     with tempfile.TemporaryDirectory() as d:
