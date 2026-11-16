@@ -5,7 +5,8 @@ name: CI
 # The Go tool (cmd/upstream, internal/) passes the org's Go checks
 # (reusable-go-ci.yml: build, gofmt, vet, staticcheck, govulncheck, go test -race
 # against the fixtures, a fake GitHub and a fake GitLab: no token, no network), its
-# coverage goes to Codecov (report-only); the workflows pass actionlint, tracked.toml
+# coverage goes to Codecov (report-only) and, with the code, to SonarQube Cloud
+# (CI-based analysis, job `sonar`); the workflows pass actionlint, tracked.toml
 # validates and reports/ and replies/ pass the outbound guards. Licence headers and
 # the org-sync drift check run in their own workflows (licence.yml, org-sync.yml).
 on:
@@ -63,3 +64,48 @@ jobs:
     with:
       artifact: go-coverage
       flags: go
+
+  # SonarQube Cloud, CI-based analysis (Automatic Analysis is off for this project,
+  # maintainer 2026-11-16): sonar-project.properties, with the Go coverage profile the
+  # `go` job keeps (go-coverage/coverage.out). The quality gate posts as its own check.
+  sonar:
+    needs: go
+    if: always() && needs.go.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        timeout-minutes: 2  # its download and start take seconds (swarm-routing/.github#164)
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # SonarQube Cloud reads the history (blame, new code)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        timeout-minutes: 2
+        with:
+          name: go-coverage
+          path: coverage
+      - name: SonarQube Cloud token
+        id: token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          FORK: ${{ github.event.pull_request.head.repo.fork || false }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$FORK" = true ]; then
+            echo "::notice::SonarQube Cloud analysis skipped: a fork's pull request gets no SONAR_TOKEN"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "::error::SONAR_TOKEN is not available to this repository: the analysis cannot run"
+          exit 1
+      - name: SonarQube Cloud analysis
+        if: steps.token.outputs.run == 'true'
+        timeout-minutes: 10
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -100,7 +100,7 @@ actionlint .github/workflows/*.yml
 
 | Workflow | What it checks | Required |
 | --- | --- | --- |
-| `ci.yml` | `go`: build, gofmt, vet, staticcheck, govulncheck, the tests with `-race` and coverage (`reusable-go-ci.yml`), `codecov`; `workflows`: `tracked.toml` validates, the outbound lint, actionlint | yes (`go / go`, `workflows`) |
+| `ci.yml` | `go`: build, gofmt, vet, staticcheck, govulncheck, the tests with `-race` and coverage (`reusable-go-ci.yml`), `codecov`; `sonar`: SonarQube Cloud's CI-based analysis (`sonar-project.properties`, the Go coverage profile; needs `SONAR_TOKEN`), its quality gate a check of its own; `workflows`: `tracked.toml` validates, the outbound lint, actionlint | yes (`go / go`, `workflows`) |
 | `licence.yml` | licence headers | yes (`headers / licence`) |
 | `org-sync.yml` | org-managed files match the org templates | yes (`check / org-sync`) |
 | `pr-title.yml` | the PR title is a lowercase Conventional Commit | yes (`title / title`) |
