@@ -1,5 +1,7 @@
 # org-sync configuration (swarm-routing/.github tools/org-sync).
 kind = "python"
+# bestpractices.dev project (OpenSSF Best Practices badge; id read from the site's public JSON, swarm-routing/.github#531)
+bestpractices_project = "16822"
 # the tool is Go (swarm-routing/.github docs/adr/0002-pipelines-are-go.md); org-sync has no Go kind,
 # so the kind stays "python" (its templates fit a tooling repository), the Python badge is left out and the Go badge is this repository's own
 badges = ["ci", "release", "doi", "cite", "vcpkg", "pypi", "licence", "conventional", "arena", "scorecard", "bestpractices", "rcapa", "ns3-bugs"]
