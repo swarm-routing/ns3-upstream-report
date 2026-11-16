@@ -8,12 +8,16 @@
 # is served from the world, a write is recorded. Run from the repository root:
 #   tools/upstream/proof/proof.sh [WORLD.json ...]
 # With no world it uses the self-test's fixtures (fixtures_world.py); `py_replay.py
-# record` records a live one (GitHub with GH_TOKEN, GitLab tokenless) as world.json in
-# the proof's directory, $TMPDIR/upstream-proof, where every file of the proof lives.
+# record` records a live one (GitHub with GH_TOKEN, GitLab tokenless) as
+# $TMPDIR/upstream-proof/world.json. Each run of this script works in a private
+# directory of its own (mktemp -d, exported as TMPDIR to every stage), removed on exit.
 set -euo pipefail
 here=tools/upstream/proof
-work="${TMPDIR:-/tmp}/upstream-proof"
-mkdir -p "$work"
+TMPDIR=$(mktemp -d)
+export TMPDIR
+trap 'rm -rf -- "$TMPDIR"' EXIT
+work="$TMPDIR/upstream-proof"
+mkdir -m 700 "$work"
 worlds=("$@")
 status=0
 run() {
@@ -28,8 +32,7 @@ if [[ "${#worlds[@]}" -eq 0 ]]; then
   run fixtures
 fi
 for w in "${worlds[@]}"; do
-  cp -- "$w" "$work/world.json.new"
-  mv -- "$work/world.json.new" "$work/world.json"
+  cp -- "$w" "$work/world.json"
   run "$(basename "$w")"
 done
 exit "$status"

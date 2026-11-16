@@ -21,7 +21,6 @@ import io
 import json
 import os
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 
@@ -29,10 +28,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import upstream  # noqa: E402
 
+sys.path.insert(0, HERE)
+from workspace import workdir  # noqa: E402
+
 # the commands of the proof, run from the repository root with these arguments
 COMMANDS = json.load(open(os.path.join(HERE, "commands.json"), encoding="utf-8"))
-# every file of the proof lives here, under fixed names: no path comes from an argument
-WORK = os.path.join(tempfile.gettempdir(), "upstream-proof")
 CANNED = {"number": 0, "id": 0, "iid": 0, "html_url": "(replay)", "web_url": "(replay)"}
 
 
@@ -40,8 +40,8 @@ def main():
     mode = sys.argv[1]
     if mode not in ("record", "replay"):
         raise SystemExit("py_replay.py record|replay")
-    os.makedirs(WORK, exist_ok=True)
-    world_path = os.path.join(WORK, "world.json")
+    work = workdir()
+    world_path = os.path.join(work, "world.json")
     world = {} if mode == "record" else json.load(open(world_path, encoding="utf-8"))
     writes = []
 
@@ -96,7 +96,7 @@ def main():
         with open(world_path, "w", encoding="utf-8") as f:
             json.dump(world, f, indent=1, sort_keys=True, ensure_ascii=False)
     else:
-        with open(os.path.join(WORK, "py.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(work, "py.json"), "w", encoding="utf-8") as f:
             json.dump(results, f, indent=1, ensure_ascii=False)
 
 

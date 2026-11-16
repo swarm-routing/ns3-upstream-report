@@ -7,13 +7,14 @@ JSON body) of the two tools, py.json and go.json in the proof's directory; one l
 import json
 import os
 import sys
-import tempfile
 
-# every file of the proof lives here, under fixed names: no path comes from an argument
-WORK = os.path.join(tempfile.gettempdir(), "upstream-proof")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from workspace import workdir  # noqa: E402
 
 
-py, go = (json.load(open(os.path.join(WORK, n), encoding="utf-8")) for n in ("py.json", "go.json"))
+py, go = (
+    json.load(open(os.path.join(workdir(), n), encoding="utf-8")) for n in ("py.json", "go.json")
+)
 bad = 0
 for a, b in zip(py, go, strict=True):
     same = (

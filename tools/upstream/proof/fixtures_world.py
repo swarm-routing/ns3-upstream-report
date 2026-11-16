@@ -6,11 +6,12 @@ self-test's recorded GitLab pages of nsnam/ns-3-dev, 2026-11-16) and an empty Gi
 
 import json
 import os
-import tempfile
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from workspace import workdir  # noqa: E402
 
 FX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures")
-# every file of the proof lives here, under fixed names: no path comes from an argument
-WORK = os.path.join(tempfile.gettempdir(), "upstream-proof")
 GL = "https://gitlab.com"
 API = f"{GL}/api/v4/projects/nsnam%2Fns-3-dev"
 
@@ -47,6 +48,5 @@ world = {
         {},
     ],
 }
-os.makedirs(WORK, exist_ok=True)
-with open(os.path.join(WORK, "world.json"), "w", encoding="utf-8") as f:
+with open(os.path.join(workdir(), "world.json"), "w", encoding="utf-8") as f:
     json.dump(world, f, indent=1, ensure_ascii=False)
