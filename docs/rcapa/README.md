@@ -10,34 +10,37 @@ swarm-routing/ns3-tools. The org's rule and its decision table are in
 ([ADR-0003](https://github.com/swarm-routing/.github/blob/main/docs/adr/0003-rcapa-for-ns3-bugs-and-released-regressions.md)).
 This page is the project's flow and its index.
 
-<!-- Seeded by org-sync from swarm-routing/.github templates/rcapa/README.md;
-the repository's own from here. Replace every TODO with this project's facts
-(its AGENTS.md, release.yml and docs), then delete this comment. -->
-
 ## The flow for this project
+
+**Nothing is published yet**: this repository has no release, no package
+and no image. What it sends out are reports and replies to ns-3's GitLab,
+each from a merged file after a veto window; a defect in that is a process
+defect, a `PROC-NNN` in swarm-routing/ns3-tools (its RCAPAs live in
+`docs/ns3-rcapa/`). The flow below starts at this repository's first
+release; until then a bug here is an ordinary `bug` issue.
 
 | | |
 |---|---|
-| Published as | TODO: the release channels this project ships (GitHub release + Zenodo DOI, PyPI, a vcpkg port, images, a site deploy, a dataset release, a plugin version), or "nothing yet: the flow starts at the first release" |
-| ID prefix | TODO: `<PREFIX>-NNN` (CONTRIBUTING "RCAPA", the prefix table) |
-| Ticket | an issue in swarm-routing/ns3-upstream-report, form *Regression in a release (RCAPA)*, title `[rcapa] <PREFIX>-NNN <short description>`, labels `rcapa` and `bug` |
-| Verified by | TODO: the check, gate or reproducer that shows the regression and its fix |
-| Corrective action | TODO: the fix and its test, and how a fixed release is cut |
-| Preventive action | TODO: the check that would have caught it before the release |
-| Closes when | the fix is merged **and** a release of the channel above carries it |
+| Published as | nothing yet: no `v*` tag; outbound GitLab text is covered by `PROC-NNN` in swarm-routing/ns3-tools |
+| ID prefix | `UPR-NNN` (from the first release) |
+| Ticket | an issue in swarm-routing/ns3-upstream-report, form *Regression in a release (RCAPA)*, title `[rcapa] UPR-NNN <short description>`, labels `rcapa` and `bug` |
+| Verified by | for the failing release and the last good one, each in its own worktree (`git worktree add ../upr-<tag> <tag>`), run there `python3 -I tools/upstream/upstream.py --self-test` (fixtures, fake GitHub and GitLab), `python3 -I tools/upstream/upstream.py validate` (that tree's `tracked.toml`) and `python3 -I tools/upstream/upstream.py lint` (its `reports/` and `replies/`) |
+| Corrective action | the fix PR with a fixture in the self-test that fails without it; then a release |
+| Preventive action | a guard or fixture in `upstream.py`'s self-test |
+| Closes when | the fix is merged **and** a release carries it |
 
 ```mermaid
 sequenceDiagram
     participant U as Reporter
     participant T as RCAPA ticket
-    participant D as This page
+    participant S as upstream.py self-test
     participant M as main
-    participant R as Release
-    U->>T: regression found against a release
-    T->>D: RCAPA document and index row
-    T->>M: fix and test, merged
-    M->>R: release that carries the fix
-    R->>T: tag and DOI recorded, ticket closed
+    participant R as First and later releases
+    U->>T: a released version misbehaves
+    T->>S: reproduce on a fixture
+    T->>M: fix with that fixture
+    M->>R: release carries the fix
+    R->>T: tag recorded, ticket closed
 ```
 
 ## Index
