@@ -184,7 +184,9 @@ Contributions from forks are welcome: see
 
 What is planned and in progress here: the issues labelled [`epic`](https://github.com/swarm-routing/ns3-upstream-report/issues?q=label%3Aepic). An epic's open sub-issues carry a `priority:*` and a `model:*` label, so a contributor or an AI agent can pick one up ([how issues work](https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#issues)). The whole org's plan: the [roadmap](https://github.com/swarm-routing/.github/blob/main/ROADMAP.md#epics).
 
-No open epic: the work here is tracked as single issues.
+| Epic | Status | Sub-issues closed |
+|------|--------|-------------------|
+| [#2](https://github.com/swarm-routing/ns3-upstream-report/issues/2) zero-manual upstream reporting: draft, verify, publish, track, reply, maintain, release | Planned | 0 / 1 |
 
 <!-- epics:end -->
 
