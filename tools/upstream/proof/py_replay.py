@@ -18,6 +18,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -30,8 +31,20 @@ COMMANDS = json.load(open(os.path.join(HERE, "commands.json"), encoding="utf-8")
 CANNED = {"number": 0, "id": 0, "iid": 0, "html_url": "(replay)", "web_url": "(replay)"}
 
 
+def inside(path):
+    """`path` resolved, refused unless it lies in the working directory or the temporary
+    directory (the proof reads and writes nowhere else)."""
+    full = os.path.realpath(path)
+    for base in (os.getcwd(), tempfile.gettempdir()):
+        root = os.path.realpath(base)
+        if os.path.commonpath([root, full]) == root:
+            return full
+    raise SystemExit(f"refused: {path} is outside the working and the temporary directory")
+
+
 def main():
     mode, world_path = sys.argv[1], sys.argv[2]
+    world_path = inside(world_path)
     world = {} if mode == "record" else json.load(open(world_path, encoding="utf-8"))
     writes = []
 
@@ -86,7 +99,7 @@ def main():
         with open(world_path, "w", encoding="utf-8") as f:
             json.dump(world, f, indent=1, sort_keys=True, ensure_ascii=False)
     else:
-        with open(sys.argv[3], "w", encoding="utf-8") as f:
+        with open(inside(sys.argv[3]), "w", encoding="utf-8") as f:
             json.dump(results, f, indent=1, ensure_ascii=False)
 
 
