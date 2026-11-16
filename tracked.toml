@@ -1,6 +1,6 @@
 # The register of upstream reports: one [[item]] per ns-3 bug the org reports
 # to nsnam/ns-3-dev, keyed by its NS3-NNN id in swarm-routing/ns3-tools
-# docs/ns3-bugs.md. tools/upstream/upstream.py reads it; its docstring is the
+# docs/ns3-bugs.md. cmd/upstream reads it; internal/register's package comment is the
 # format. An item enters only by a reviewed pull request to main, and the
 # publish and reply workflows act only on the mirror tickets of items listed
 # here, so this file is also the allowlist of what can be sent upstream.

@@ -96,5 +96,6 @@ by govulncheck in `reusable-go-ci.yml`.
   `write_repository` and a new decision.
 - The token is short-lived from the first rotation on, and its expiry is
   watched.
-- `tools/upstream/` (the Python tool, its fixtures and the proof) is removed
-  in a follow-up pull request once the Go tool has run green.
+- `tools/upstream/` (the Python tool, its fixtures and the proof) was removed
+  after the Go tool's first green run (read run 43911328065) and the
+  required check moved from `python / python` to `go / go`.

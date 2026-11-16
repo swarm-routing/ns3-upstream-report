@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 name: Licence
 
-# tools/ and the Go tool (cmd/, internal/) are MIT OR GPL-2.0-only, everything
-# else GPL-2.0-only (LICENSING.md).
+# The Go tool (cmd/, internal/) is MIT OR GPL-2.0-only, everything else
+# GPL-2.0-only (LICENSING.md).
 on:
   push:
     branches: [main]
@@ -17,5 +17,5 @@ jobs:
   headers:
     uses: swarm-routing/.github/.github/workflows/reusable-licence-check.yml@main
     with:
-      dual-roots: tools/ cmd/ internal/
+      dual-roots: cmd/ internal/
       core-roots: ''

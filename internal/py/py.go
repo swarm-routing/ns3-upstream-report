@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 // Package py holds the few Python semantics the bridge's output depends on, so
-// the Go tool writes byte for byte what tools/upstream/upstream.py wrote: str.strip
+// the Go tool writes byte for byte what the Python tool (tools/upstream/upstream.py, removed after the port) wrote: str.strip
 // and str.splitlines over Python's whitespace and line breaks, the regex \w and \s
 // classes for str patterns, str() of a decoded JSON value, json.dumps and
 // urllib.parse.quote.
