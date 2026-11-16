@@ -182,8 +182,8 @@ def http(method, url, headers, body=None):
 # --- the register --------------------------------------------------------------
 
 
-def load_tracked(path):
-    with open(path, "rb") as f:
+def load_tracked(path, base=None):
+    with open(contained(base or os.getcwd(), path), "rb") as f:
         cfg = tomllib.load(f)
     errors = validate(cfg)
     if errors:
@@ -560,7 +560,7 @@ def lint_outbound(text, proj):
     `owner/repo#N` (GitLab links a GitLab project). Ours must be full GitHub URLs; an ns-3
     item is `nsnam/ns-3-dev#N` or its full GitLab URL. Code spans and blocks are not linked."""
     t = re.sub(r"(?ms)^ {0,3}(```|~~~).*?^ {0,3}\1[^\n]*$", " ", text)
-    t = re.sub(r"(`+)(?:(?!\1).)+?\1", " ", t, flags=re.S)
+    t = re.sub(r"``[^`]*``|`[^`\n]*`", " ", t)  # code spans (linear: no backtracking)
     t = ANY_URL.sub(" ", t)
     problems = []
     for m in OUTBOUND_REF.finditer(t):
@@ -840,9 +840,10 @@ def digest(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
 
 
-def read_file(path):
+def read_file(base, rel):
+    """A file of the repository's `base`, refused outside it; None if missing."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(contained(base, rel), encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -855,7 +856,7 @@ def report_file(root, it):
 def parse_report(text):
     """(title, body) of reports/NS3-NNN.md: a first line `# <GitLab title>`, then the body."""
     first, _, body = text.lstrip("﻿").partition("\n")
-    m = re.fullmatch(r"# (\S.*?)\s*", first)
+    m = re.fullmatch(r"# (\S.*)", first.strip())
     if not m or not body.strip():
         raise ValueError("a report starts with `# <GitLab title>`, then its body")
     return m.group(1), body.strip()
@@ -891,9 +892,7 @@ def lint_files(cfg, root):
                     f"{rel}: not patches/<an id>/<one of its merge requests>/NNNN-*.patch"
                 )
                 continue
-            problems += [
-                f"{rel}: {p}" for p in lint_patch(read_file(os.path.join(root, rel)) or "")
-            ]
+            problems += [f"{rel}: {p}" for p in lint_patch(read_file(root, rel) or "")]
     for sub in ("reports", "replies"):
         base = os.path.join(root, sub)
         for dirpath, _, files in os.walk(base):
@@ -902,7 +901,7 @@ def lint_files(cfg, root):
                     continue  # the directory's own explanation, never sent
                 path = os.path.join(dirpath, name)
                 rel = os.path.relpath(path, root)
-                text = read_file(path) or ""
+                text = read_file(root, rel) or ""
                 if sub == "reports":
                     m = re.fullmatch(r"(NS3-\d{3})\.md", name)
                     if not m or m.group(1) not in ids or dirpath != base:
@@ -947,7 +946,7 @@ def candidates(cfg, root, it, comments, now):
     proj = cfg["gitlab_project"]
     out = []
     published = any(v.startswith("publish ") for v, _ in sent_markers(cfg, comments))
-    text = read_file(report_file(root, it))
+    text = read_file(root, os.path.relpath(report_file(root, it), root))
     if text is not None and not (it.get("issue") or published):
         problems = []
         try:
@@ -991,7 +990,7 @@ def candidates(cfg, root, it, comments, now):
         key = f"reply {it['id']}/{nid}"
         if key in sent:
             continue
-        body = outbound(read_file(path) or "")
+        body = outbound(read_file(root, os.path.relpath(path, root)) or "")
         problems = []
         target = threads.get(nid)
         if target is None or not ref_in_item(it, *target):
@@ -1068,8 +1067,8 @@ def patch_series(root, it, mr):
     out = []
     for name in sorted(os.listdir(d)):
         if re.fullmatch(r"\d{4}-[A-Za-z0-9._-]+\.patch", name):
-            with open(os.path.join(d, name), encoding="utf-8") as f:
-                out.append((name, f.read()))
+            rel = os.path.join("patches", it["id"], str(mr), name)
+            out.append((name, read_file(root, rel) or ""))
     return out
 
 
@@ -2821,7 +2820,7 @@ draft = ["swarm-routing/ns3-containers#55"]
             f.write('gitlab_project = "nsnam/ns-3-dev"\n[[item]]\nid = "NS3-9"\n')
         check(
             "validate exits on an invalid register",
-            refused(lambda: load_tracked(path), "id is not"),
+            refused(lambda: load_tracked(path, d), "id is not"),
         )
 
     for f in failures:
