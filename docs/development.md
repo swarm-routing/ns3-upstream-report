@@ -74,8 +74,8 @@ The port's proof, while `tools/upstream/` exists:
 
 ```bash
 tools/upstream/proof/proof.sh                       # the self-test's fixtures
-python3 -I tools/upstream/proof/py_replay.py record /tmp/world.json   # a live world (GH_TOKEN for GitHub)
-tools/upstream/proof/proof.sh /tmp/world.json
+python3 -I tools/upstream/proof/py_replay.py record   # a live world (GH_TOKEN for GitHub), as $TMPDIR/upstream-proof/world.json
+cp "${TMPDIR:-/tmp}/upstream-proof/world.json" /tmp/live.json && tools/upstream/proof/proof.sh /tmp/live.json
 ```
 
 Both tools run the commands of `tools/upstream/proof/commands.json` against
