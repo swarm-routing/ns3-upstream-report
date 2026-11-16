@@ -130,6 +130,7 @@ OUTBOUND_REF = re.compile(
 )
 ANY_URL = re.compile(r"https?://[^\s)\]>]+")
 STALL_DAYS = 14
+MAX_PAGES = 100  # pages of one thread's notes at most (a guard against a cursor loop)
 MAX_NEW_NOTES = 50  # comments one run adds per item at most; the rest come next run
 # the last upstream note asks something of us: a question mark or a request
 QUESTION = re.compile(r"\?|\bplease\b", re.I)
@@ -149,7 +150,8 @@ class HttpError(Exception):
 
 
 def http(method, url, headers, body=None):
-    """One HTTP request: (status, parsed JSON or None). Headers are never in the error."""
+    """One HTTP request: (status, parsed JSON or None, response headers lowercased).
+    Request headers are never in the error."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     if data is not None:
@@ -157,7 +159,8 @@ def http(method, url, headers, body=None):
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read()
-            return r.status, (json.loads(raw) if raw.strip() else None)
+            got = {k.lower(): v for k, v in r.headers.items()}
+            return r.status, (json.loads(raw) if raw.strip() else None), got
     except urllib.error.HTTPError as e:
         msg = e.read().decode(errors="replace")[:300]
         raise HttpError(method, url, e.code, msg) from None
@@ -166,8 +169,8 @@ def http(method, url, headers, body=None):
 # --- the register --------------------------------------------------------------
 
 
-def load_tracked(path):
-    with open(path, "rb") as f:
+def load_tracked(path, base=None):
+    with open(contained(base or os.getcwd(), path), "rb") as f:
         cfg = tomllib.load(f)
     errors = validate(cfg)
     if errors:
@@ -330,9 +333,21 @@ class GitLab:
                     break
                 page += 1
         else:
+            # the public page is cursor-paginated (20 discussions a page): follow
+            # x-next-page-cursor to the end, or the newest notes are lost
             url = f"{self.base}/{self.project}/-/{self.path(kind)}/{iid}/discussions.json"
-            for d in self._get(url):
-                raw += d.get("notes", [])
+            headers = {"Accept": "application/json", "User-Agent": "ns3-upstream-report"}
+            cursor = None
+            for _ in range(MAX_PAGES):
+                q = f"?cursor={urllib.parse.quote(cursor, safe='')}" if cursor else ""
+                got = self.transport("GET", url + q, headers)
+                for d in got[1] or []:
+                    raw += d.get("notes", [])
+                cursor = (got[2] if len(got) > 2 else {}).get("x-next-page-cursor")
+                if not cursor:
+                    break
+            else:
+                raise SystemExit(f"{url}: more than {MAX_PAGES} pages")
         out = [
             {
                 "id": str(n["id"]),
@@ -503,7 +518,7 @@ def lint_outbound(text, proj):
     `owner/repo#N` (GitLab links a GitLab project). Ours must be full GitHub URLs; an ns-3
     item is `nsnam/ns-3-dev#N` or its full GitLab URL. Code spans and blocks are not linked."""
     t = re.sub(r"(?ms)^ {0,3}(```|~~~).*?^ {0,3}\1[^\n]*$", " ", text)
-    t = re.sub(r"(`+)(?:(?!\1).)+?\1", " ", t, flags=re.S)
+    t = re.sub(r"``[^`]*``|`[^`\n]*`", " ", t)  # code spans (linear: no backtracking)
     t = ANY_URL.sub(" ", t)
     problems = []
     for m in OUTBOUND_REF.finditer(t):
@@ -783,9 +798,10 @@ def digest(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
 
 
-def read_file(path):
+def read_file(base, rel):
+    """A file of the repository's `base`, refused outside it; None if missing."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(contained(base, rel), encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -798,7 +814,7 @@ def report_file(root, it):
 def parse_report(text):
     """(title, body) of reports/NS3-NNN.md: a first line `# <GitLab title>`, then the body."""
     first, _, body = text.lstrip("﻿").partition("\n")
-    m = re.fullmatch(r"# (\S.*?)\s*", first)
+    m = re.fullmatch(r"# (\S.*)", first.strip())
     if not m or not body.strip():
         raise ValueError("a report starts with `# <GitLab title>`, then its body")
     return m.group(1), body.strip()
@@ -830,7 +846,7 @@ def lint_files(cfg, root):
                     continue  # the directory's own explanation, never sent
                 path = os.path.join(dirpath, name)
                 rel = os.path.relpath(path, root)
-                text = read_file(path) or ""
+                text = read_file(root, rel) or ""
                 if sub == "reports":
                     m = re.fullmatch(r"(NS3-\d{3})\.md", name)
                     if not m or m.group(1) not in ids or dirpath != base:
@@ -875,7 +891,7 @@ def candidates(cfg, root, it, comments, now):
     proj = cfg["gitlab_project"]
     out = []
     published = any(v.startswith("publish ") for v, _ in sent_markers(cfg, comments))
-    text = read_file(report_file(root, it))
+    text = read_file(root, os.path.relpath(report_file(root, it), root))
     if text is not None and not (it.get("issue") or published):
         problems = []
         try:
@@ -919,7 +935,7 @@ def candidates(cfg, root, it, comments, now):
         key = f"reply {it['id']}/{nid}"
         if key in sent:
             continue
-        body = outbound(read_file(path) or "")
+        body = outbound(read_file(root, os.path.relpath(path, root)) or "")
         problems = []
         target = threads.get(nid)
         if target is None or not ref_in_item(it, *target):
@@ -1501,6 +1517,11 @@ draft = ["swarm-routing/ns3-containers#55"]
         f"{GITLAB}/nsnam/ns-3-dev/-/merge_requests/2985/discussions.json": load(
             "mr-2985-discussions.json"
         ),
+        # the public page is cursor-paginated: its second page holds the newest notes
+        # (recorded 2026-11-16; tokenless reads before the fix never saw them)
+        f"{GITLAB}/nsnam/ns-3-dev/-/merge_requests/2985/discussions.json?cursor=c2": load(
+            "mr-2985-discussions-2.json"
+        ),
         f"{GITLAB}/nsnam/ns-3-dev/-/merge_requests/3011/discussions.json": [],
     }
     gl_calls, gl_created = [], []
@@ -1545,11 +1566,15 @@ draft = ["swarm-routing/ns3-containers#55"]
             if "PRIVATE-TOKEN" not in headers:
                 raise HttpError(method, url, 401, "401 Unauthorized")
             disc = url.replace(api, f"{GITLAB}/nsnam/ns-3-dev/-").split("/notes?")[0]
-            notes = [n for d in gl_data[disc + "/discussions.json"] for n in d["notes"]]
+            pages = gl_data[disc + "/discussions.json"] + gl_data.get(
+                disc + "/discussions.json?cursor=c2", []
+            )
+            notes = [n for d in pages for n in d["notes"]]
             return 200, [dict(n, id=int(n["id"]) if n["id"].isdigit() else n["id"]) for n in notes]
         if url not in gl_data:
             raise HttpError(method, url, 404, "404 Not Found")
-        return 200, json.loads(json.dumps(gl_data[url]))
+        nxt = {"x-next-page-cursor": "c2"} if f"{url}?cursor=c2" in gl_data else {}
+        return 200, json.loads(json.dumps(gl_data[url])), nxt
 
     class FakeGitHub:
         def __init__(self):
@@ -1624,13 +1649,23 @@ draft = ["swarm-routing/ns3-containers#55"]
     t1 = next(i for i in fake.issues.values() if "NS3-001" in i["title"])
     user_notes = [
         n
-        for f in ("issue-1364-discussions.json", "mr-2985-discussions.json")
+        for f in (
+            "issue-1364-discussions.json",
+            "mr-2985-discussions.json",
+            "mr-2985-discussions-2.json",
+        )
         for d in load(f)
         for n in d["notes"]
         if not n["system"]
     ]
     mirrored = [c for c in fake.comments[t3["number"]] if c["body"].startswith("<!-- gitlab-note:")]
     check("tokenless read: no token sent to GitLab", not any(c[2] for c in gl_calls))
+    marks = {c["body"].split("\n")[0].split()[-2] for c in mirrored}
+    check(
+        "tokenless read follows every page: the newest notes of !2985 are mirrored",
+        {"3692328913", "3825700321", "3844625389"} <= marks
+        and any(c[1].endswith("/discussions.json?cursor=c2") for c in gl_calls),
+    )
     check(
         "tokenless read: notes from discussions.json",
         any(c[1].endswith("/merge_requests/2985/discussions.json") for c in gl_calls)
@@ -1641,7 +1676,7 @@ draft = ["swarm-routing/ns3-containers#55"]
     )
     check(
         "every user note mirrored once, none of the system notes",
-        len(mirrored) == len(user_notes) == 15
+        len(mirrored) == len(user_notes) == 18
         and {c["body"].split("\n")[0].split()[-2] for c in mirrored}
         == {n["id"] for n in user_notes},
     )
@@ -1668,13 +1703,13 @@ draft = ["swarm-routing/ns3-containers#55"]
     flags = [c for c in fake.comments[t3["number"]] if c["body"].startswith("<!-- upstream-flags:")]
     fl = flags[0]["body"] if flags else ""
     check(
-        "stalls flagged: no activity, need_rebase, no reviewer, unanswered question, competing MR",
+        "stalls flagged: no activity, need_rebase, no reviewer, competing MR; the answered request not flagged",
         len(flags) == 1
         and "no activity for 60 days" in fl
         and "need_rebase ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985))" in fl
         and "no reviewer ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985))" in fl
-        and "unanswered question ([!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985), tomhenderson 2026-08-17)"
-        in fl
+        # our "Done: attribution added" (on the second page) answered tomhenderson's request
+        and "unanswered question" not in fl
         and "#1364" not in fl
         and "competing merge request [!3011](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011)"
         in fl
@@ -1761,7 +1796,7 @@ draft = ["swarm-routing/ns3-containers#55"]
     check(
         "token read: notes from the REST API, same comments",
         any("/notes?" in c[1] for c in gl_calls)
-        and len([c for c in fake2.comments[1] if c["body"].startswith("<!-- gitlab-note:")]) == 16,
+        and len([c for c in fake2.comments[1] if c["body"].startswith("<!-- gitlab-note:")]) == 19,
     )
     check(
         "the token never reaches GitHub or the output",
@@ -2231,7 +2266,7 @@ draft = ["swarm-routing/ns3-containers#55"]
             f.write('gitlab_project = "nsnam/ns-3-dev"\n[[item]]\nid = "NS3-9"\n')
         check(
             "validate exits on an invalid register",
-            refused(lambda: load_tracked(path), "id is not"),
+            refused(lambda: load_tracked(path, d), "id is not"),
         )
 
     for f in failures:
