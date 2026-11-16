@@ -1147,7 +1147,16 @@ def validate_reproduce(where, r):
     return errors
 
 
-def cmd_verify(cfg, item_id, ns3, out_path, fetch=None, shell=None):
+def contained(base, path):
+    """`path` resolved, refused unless it lies inside `base` (no traversal, no symlink out)."""
+    root = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(root, path))
+    if os.path.commonpath([root, full]) != root:
+        raise SystemExit(f"refused: {path} is outside {base}")
+    return full
+
+
+def cmd_verify(cfg, item_id, ns3, out_path, fetch=None, shell=None, out_base=None):
     """P1: put the reproducer into the ns-3-dev tree at `ns3`, configure, build, run; the
     result (reproduces / not reproduced / error) and the master commit go to out_path."""
     import subprocess
@@ -1160,8 +1169,9 @@ def cmd_verify(cfg, item_id, ns3, out_path, fetch=None, shell=None):
             ["bash", "-c", cmd], cwd=ns3, capture_output=True, text=True, timeout=timeout
         )
     )
+    out_path = contained(out_base or os.getcwd(), out_path)
     for rel, url in sorted(r.get("files", {}).items()):
-        path = os.path.join(ns3, rel)
+        path = contained(ns3, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(fetch(url))
@@ -1396,8 +1406,11 @@ def main(argv=None):
         lines = []
     elif a.cmd == "verify-record":
         results = []
-        for name in sorted(os.listdir(a.results)):
-            with open(os.path.join(a.results, name), encoding="utf-8") as f:
+        base = contained(os.getcwd(), a.results)
+        for name in sorted(os.listdir(base)):
+            if not re.fullmatch(r"NS3-\d{3}\.json", name):
+                continue
+            with open(contained(base, name), encoding="utf-8") as f:
                 results.append(json.load(f))
         lines = cmd_verify_record(cfg, gh, results, a.run_url, now)
     elif a.cmd == "lifecycle":
@@ -2080,11 +2093,25 @@ draft = ["swarm-routing/ns3-containers#55"]
         out = os.path.join(ns3, "r.json")
         with contextlib.redirect_stdout(io.StringIO()):
             got = cmd_verify(
-                vcfg, "NS3-001", ns3, out, fetch=lambda u: b"// code\n", shell=shell_for(124)
+                vcfg,
+                "NS3-001",
+                ns3,
+                out,
+                fetch=lambda u: b"// code\n",
+                shell=shell_for(124),
+                out_base=ns3,
             )
-            miss = cmd_verify(vcfg, "NS3-001", ns3, out, fetch=lambda u: b"x", shell=shell_for(0))
+            miss = cmd_verify(
+                vcfg, "NS3-001", ns3, out, fetch=lambda u: b"x", shell=shell_for(0), out_base=ns3
+            )
             err = cmd_verify(
-                vcfg, "NS3-001", ns3, out, fetch=lambda u: b"x", shell=shell_for(0, "./ns3 build")
+                vcfg,
+                "NS3-001",
+                ns3,
+                out,
+                fetch=lambda u: b"x",
+                shell=shell_for(0, "./ns3 build"),
+                out_base=ns3,
             )
         check(
             "P1: the reproducer runs in the tree, its expected exit is 'reproduces'",
@@ -2094,6 +2121,12 @@ draft = ["swarm-routing/ns3-containers#55"]
             and any("--enable-modules='core;network;internet;aodv'" in c for c in ran),
         )
         check("P1: another exit is 'not-reproduced'", miss["result"] == "not-reproduced")
+        check(
+            "paths are contained: no file or result outside its directory",
+            refused(lambda: contained(ns3, "../x"), "outside")
+            and refused(lambda: contained(ns3, "/etc/passwd"), "outside")
+            and contained(ns3, "scratch/a.cc").startswith(os.path.realpath(ns3)),
+        )
         check("P1: a failed build is 'error', the run is not attempted", err["result"] == "error")
     fv = FakeGitHub()
     gv = GitHub("o/r", "t", fv.transport)
