@@ -21,9 +21,9 @@ maintainer approves it.
 
 **Status (2026-11-16): the design is decided
 ([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md), #2).
-P2 read runs every 6 h; P0 draft, P3 publish and P4 reply (`send.yml`) run
-with their guards; P1 verify, P5 MR maintenance, P6 lifecycle and P7
-credentials are being built (#2).** Nothing reaches GitLab until the
+P2 read runs every 6 h; P0 draft, P1 verify (`verify.yml`), P3 publish and
+P4 reply (`send.yml`) and P6 lifecycle (`lifecycle.yml`) run with their
+guards; P5 MR maintenance and P7 credentials are being built (#2).** Nothing reaches GitLab until the
 maintainer has stored the GitLab tokens.
 
 ## How it works
@@ -106,6 +106,8 @@ sequenceDiagram
 |----------|----------|--------------|
 | P0 draft | a pull request | an agent writes `reports/NS3-NNN.md` (first line `# <GitLab title>`) or `replies/NS3-NNN/<note-id>.md` from the RCAPA document; CI's `upstream.py lint` checks it |
 | P2 read | [`read.yml`](.github/workflows/read.yml), every 6 h | for every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none, fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request. Runs without a token (GitLab's public pages) |
+| P1 verify | [`verify.yml`](.github/workflows/verify.yml), weekly and on a register change | for each open item with a `reproduce` table: builds ns-3-dev `master` with the `ns3-dev` toolchain, runs the reproducer, and records the result on the mirror ticket; a report is sent only after a "reproduces" from the last 7 days |
+| P6 lifecycle | [`lifecycle.yml`](.github/workflows/lifecycle.yml), daily | when an `ns-3.X` tag contains the merge commit of our merge request: "fixed in ns-3.X" on the ticket, one issue per workaround, and the RCAPA ticket closed when they are all closed |
 | P3 publish, P4 reply | [`send.yml`](.github/workflows/send.yml), hourly and on a merge | the plan job (no secret) checks the guards and schedules each post on its ticket with the exact text; the send job (environment `gitlab-write`) posts what is due and links it back |
 
 `tracked.toml` is the register and the allowlist: one `[[item]]` per report

@@ -1,0 +1,97 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: verify
+
+# P1 verify (docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md): for each
+# open item with a `reproduce` table in tracked.toml, build ns-3-dev `master`
+# with the ns3-dev image's toolchain, run the reproducer, and record the result
+# (reproduces / not-reproduced / error, the master commit, this run) on the
+# mirror ticket. A report is sent only with a "reproduces" from the last 7 days.
+# No token: the verify jobs build and run upstream code, so they hold nothing.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  push:
+    branches: [main]
+    paths: ['tracked.toml']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-verify
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      items: ${{ steps.m.outputs.items }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: m
+        run: python3 -I tools/upstream/upstream.py verify-matrix
+
+  verify:
+    needs: matrix
+    if: needs.matrix.outputs.items != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    container: ghcr.io/swarm-routing/ns3-dev:latest-debug
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.matrix.outputs.items) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: bridge
+      - name: Clone ns-3-dev master
+        timeout-minutes: 10
+        run: git clone -q --depth 1 https://gitlab.com/nsnam/ns-3-dev.git /tmp/ns-3-dev
+      - name: Build master and run the reproducer
+        env:
+          ITEM: ${{ matrix.item }}
+        run: |
+          mkdir -p results
+          python3 -I bridge/tools/upstream/upstream.py verify --tracked bridge/tracked.toml \
+            "$ITEM" --ns3 /tmp/ns-3-dev --out "results/$ITEM.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: verify-${{ matrix.item }}
+          path: results/
+          retention-days: 7
+
+  record:
+    needs: [matrix, verify]
+    if: always() && needs.matrix.outputs.items != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: verify-*
+          merge-multiple: true
+          path: results
+      - name: Record each result on its mirror ticket
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p results
+          python3 -I tools/upstream/upstream.py verify-record --results results --run-url "$RUN_URL"

@@ -14,6 +14,15 @@ title = "AODV livelocks in a zero-time ICMP \"net unreachable\" storm"
 state = "draft"
 rcapa = "swarm-routing/ns3-tools#238"
 draft = ["swarm-routing/ns3-containers#55"]
+# the issues that track this bug's workarounds (P6 opens one removal issue per entry)
+workarounds = ["swarm-routing/ns3-containers#35", "swarm-routing/AntHocNet#843"]
+
+# P1 verify: the minimal reproducer of swarm-routing/ns3-containers#35 hangs (timeout's exit 124)
+[item.reproduce]
+modules = "core;network;internet;wifi;mobility;applications;aodv;olsr;dsdv"
+files = { "scratch/manet-canary/manet-canary.cc" = "https://raw.githubusercontent.com/swarm-routing/ns3-containers/c8334e8ccd38a4fa974f283b4964ab69a0102d73/test/fixtures/manet-canary/manet-canary.cc" }
+run = "timeout 120 ./ns3 run --no-build 'manet-canary --protocol=aodv --range=100'"
+expect = "exit 124"
 
 [[item]]
 id = "NS3-002"
@@ -21,6 +30,14 @@ title = "AODV and DSDV order per-interface sockets by heap address"
 state = "draft"
 rcapa = "swarm-routing/ns3-tools#239"
 draft = ["swarm-routing/ns3-tools#206"]
+
+# P1 verify: routing-bench's ArmIsolationTest (swarm-routing/ns3-tools#198) prints DIFFERS when the
+# multi-interface AODV row depends on the heap layout
+[item.reproduce]
+modules = "core;network;internet;wifi;mobility;applications;aodv;olsr;dsdv;mesh;flow-monitor;energy;propagation;routing-bench"
+setup = "git clone -q --filter=blob:none https://github.com/swarm-routing/ns3-tools /tmp/ns3-tools && git -C /tmp/ns3-tools checkout -q bb2951e1d25eee3e5d5260927f6288a443fa4ee8 && cp -r /tmp/ns3-tools/ns3/routing-bench contrib/"
+run = "./ns3 run --no-build 'test-runner --suite=routing-bench --verbose'"
+expect = "output DIFFERS"
 
 [[item]]
 id = "NS3-003"
