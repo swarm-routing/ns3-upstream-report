@@ -1435,7 +1435,7 @@ def contained(base, path):
     return full
 
 
-def cmd_verify(cfg, item_id, ns3, out_path, fetch=None, shell=None, out_base=None):
+def cmd_verify(cfg, item_id, ns3, fetch=None, shell=None, out_base=None):
     """P1: put the reproducer into the ns-3-dev tree at `ns3`, configure, build, run; the
     result (reproduces / not reproduced / error) and the master commit go to out_path."""
     import subprocess
@@ -1448,7 +1448,10 @@ def cmd_verify(cfg, item_id, ns3, out_path, fetch=None, shell=None, out_base=Non
             ["bash", "-c", cmd], cwd=ns3, capture_output=True, text=True, timeout=timeout
         )
     )
-    out_path = contained(out_base or os.getcwd(), out_path)
+    # the result's name comes from the register, never from an argument
+    out_dir = os.path.join(out_base or os.getcwd(), "results")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, it["id"] + ".json")
     for rel, url in sorted(r.get("files", {}).items()):
         path = contained(ns3, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1708,7 +1711,6 @@ def main(argv=None):
         if name == "verify":
             s.add_argument("item")
             s.add_argument("--ns3", required=True)
-            s.add_argument("--out", required=True)
         if name == "verify-record":
             s.add_argument("--results", required=True)
             s.add_argument("--run-url", required=True)
@@ -1735,7 +1737,7 @@ def main(argv=None):
         write_output({"items": json.dumps(ids)}, f"verify: {', '.join(ids) or 'nothing'}\n")
         return 0
     if a.cmd == "verify":
-        got = cmd_verify(cfg, a.item, a.ns3, a.out)
+        got = cmd_verify(cfg, a.item, a.ns3)
         return 0 if got["result"] != "error" else 1
     gh, gl = clients(cfg, a.dry_run)
     gl.dry = a.dry_run
@@ -2440,25 +2442,22 @@ draft = ["swarm-routing/ns3-containers#55"]
 
             return sh
 
-        out = os.path.join(ns3, "r.json")
         with contextlib.redirect_stdout(io.StringIO()):
             got = cmd_verify(
                 vcfg,
                 "NS3-001",
                 ns3,
-                out,
                 fetch=lambda u: b"// code\n",
                 shell=shell_for(124),
                 out_base=ns3,
             )
             miss = cmd_verify(
-                vcfg, "NS3-001", ns3, out, fetch=lambda u: b"x", shell=shell_for(0), out_base=ns3
+                vcfg, "NS3-001", ns3, fetch=lambda u: b"x", shell=shell_for(0), out_base=ns3
             )
             err = cmd_verify(
                 vcfg,
                 "NS3-001",
                 ns3,
-                out,
                 fetch=lambda u: b"x",
                 shell=shell_for(0, "./ns3 build"),
                 out_base=ns3,
@@ -2468,6 +2467,7 @@ draft = ["swarm-routing/ns3-containers#55"]
             got["result"] == "reproduces"
             and got["master"].startswith("8ec9b4a1")
             and os.path.exists(os.path.join(ns3, "scratch/c/c.cc"))
+            and os.path.exists(os.path.join(ns3, "results", "NS3-001.json"))
             and any("--enable-modules='core;network;internet;aodv'" in c for c in ran),
         )
         check("P1: another exit is 'not-reproduced'", miss["result"] == "not-reproduced")
