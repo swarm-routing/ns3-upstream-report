@@ -77,11 +77,14 @@ go build -o upstream ./cmd/upstream
 env -u GITHUB_TOKEN -u GITLAB_TOKEN ./upstream read --dry-run
 ```
 
-The real runs are the workflows: `read.yml` (every 6 h, or **Run workflow**
-with `dry_run`), `send.yml` (hourly and on a merge to `reports/`,
-`replies/` or `tracked.toml`), `maintain.yml` (daily), `rotate.yml`
-(weekly). Never run `read`, `plan`, `send`, `maintain` or `rotate` without
-`--dry-run` locally.
+The real runs are the workflows: `read.yml` (every 6 h), `send.yml` (hourly
+and on a merge to `reports/`, `replies/` or `tracked.toml`), `maintain.yml`
+(daily), `rotate.yml` (weekly). **Run workflow** on any of them takes `mode`:
+`dry-run` (the default: it prints the writes and makes none) or `scheduled` (a
+real run, as the schedule makes). Because GitHub has fired no schedule in this
+repository (#33), swarm-routing/.github's `backstop.yml` dispatches them with
+`mode: scheduled` when no run started within their period. Never run `read`,
+`plan`, `send`, `maintain` or `rotate` without `--dry-run` locally.
 
 ## Docker and dev containers
 

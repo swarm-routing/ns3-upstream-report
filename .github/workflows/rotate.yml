@@ -16,10 +16,11 @@ on:
     - cron: '29 4 * * 3'
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Check only; rotate and store nothing
-        type: boolean
-        default: true
+      mode:
+        description: 'dry-run (the default: print the writes, make none) or scheduled (a real run, as the schedule makes; what the org-bot backstop sends, swarm-routing/.github backstop.yml)'
+        type: choice
+        options: [dry-run, scheduled]
+        default: dry-run
 
 permissions: {}
 
@@ -54,7 +55,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'scheduled' && 'true' || 'false' }}
         run: |
           if [ "$DRY_RUN" = true ]; then
             upstream rotate --dry-run
