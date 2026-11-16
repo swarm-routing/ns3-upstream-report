@@ -4,15 +4,15 @@
 """The bridge between the org's mirror tickets and ns-3's GitLab (nsnam/ns-3-dev).
 
 Usage:
-  upstream.py validate [--tracked FILE]
-  upstream.py lint     [--tracked FILE] [--root DIR]
-  upstream.py read     [--tracked FILE] [--dry-run] [--now ISO-8601]
-  upstream.py plan     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
-  upstream.py send     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
-  upstream.py verify-matrix [--tracked FILE]
-  upstream.py verify   [--tracked FILE] ITEM --ns3 DIR --out FILE
-  upstream.py verify-record [--tracked FILE] --results DIR --run-url URL [--dry-run]
-  upstream.py lifecycle [--tracked FILE] [--dry-run] [--now ISO-8601]
+  upstream.py validate
+  upstream.py lint     [--root DIR]
+  upstream.py read     [--dry-run] [--now ISO-8601]
+  upstream.py plan     [--dry-run] [--now ISO-8601]
+  upstream.py send     [--dry-run] [--now ISO-8601]
+  upstream.py verify-matrix
+  upstream.py verify   ITEM --ns3 DIR
+  upstream.py verify-record --results DIR --run-url URL [--dry-run]
+  upstream.py lifecycle [--dry-run] [--now ISO-8601]
   upstream.py --self-test
 
 `tracked.toml` is the register: one `[[item]]` per upstream report, keyed by
@@ -1376,9 +1376,6 @@ def main(argv=None):
         "lifecycle",
     ):
         s = sub.add_parser(name)
-        s.add_argument("--tracked", default=TRACKED)
-        if name in ("lint", "plan", "send"):
-            s.add_argument("--root", default=ROOT)
         if name in ("read", "plan", "send", "verify-record", "lifecycle"):
             s.add_argument("--dry-run", action="store_true")
             s.add_argument("--now")
@@ -1394,12 +1391,12 @@ def main(argv=None):
     if not a.cmd:
         p.print_help()
         return 2
-    cfg = load_tracked(a.tracked)
+    cfg = load_tracked(TRACKED, ROOT)  # the repository's own register, never a path argument
     if a.cmd == "validate":
         print(f"tracked.toml: {len(cfg.get('item', []))} item(s), valid")
         return 0
     if a.cmd == "lint":
-        problems = lint_files(cfg, a.root)
+        problems = lint_files(cfg, ROOT)
         for x in problems:
             print(x)
         print(f"reports/, replies/: {len(problems)} problem(s)")
@@ -1419,7 +1416,7 @@ def main(argv=None):
     if a.cmd == "read":
         lines = cmd_read(cfg, gl, gh, now)
     elif a.cmd == "plan":
-        lines, ready = cmd_plan(cfg, gh, a.root, now)
+        lines, ready = cmd_plan(cfg, gh, ROOT, now)
         write_output({"ready": "true" if ready else "false"}, "\n".join(lines) + "\n")
         lines = []
     elif a.cmd == "verify-record":
@@ -1436,7 +1433,7 @@ def main(argv=None):
         gh_org = GitHub(gh.repo, org, dry_run=a.dry_run) if org else None
         lines = cmd_lifecycle(cfg, gl, gh, now, gh_org)
     else:
-        lines = cmd_send(cfg, gh, gl, a.root, now)
+        lines = cmd_send(cfg, gh, gl, ROOT, now)
     for line in lines:
         print(line)
     if a.dry_run:
@@ -1543,7 +1540,7 @@ draft = ["swarm-routing/ns3-containers#55"]
                     got, state="opened", labels=[], updated_at="2026-11-18T13:00:00.000Z"
                 )
                 gl_data[f"{GITLAB}/nsnam/ns-3-dev/-/issues/{iid}/discussions.json"] = []
-                return 201, got
+                return 201, got, {}
             nid = str(9000000 + len(gl_calls))
             disc = url.replace(api, f"{GITLAB}/nsnam/ns-3-dev/-").split("/notes")[0]
             gl_data.setdefault(disc + "/discussions.json", []).append(
@@ -1559,9 +1556,9 @@ draft = ["swarm-routing/ns3-containers#55"]
                     ]
                 }
             )
-            return 201, {"id": int(nid)}
+            return 201, {"id": int(nid)}, {}
         if "/issues?search=" in url:
-            return 200, [dict(i) for i in gl_created]
+            return 200, [dict(i) for i in gl_created], {}
         if url.endswith("/notes?sort=asc&order_by=created_at&per_page=100&page=1"):
             if "PRIVATE-TOKEN" not in headers:
                 raise HttpError(method, url, 401, "401 Unauthorized")
@@ -1570,7 +1567,11 @@ draft = ["swarm-routing/ns3-containers#55"]
                 disc + "/discussions.json?cursor=c2", []
             )
             notes = [n for d in pages for n in d["notes"]]
-            return 200, [dict(n, id=int(n["id"]) if n["id"].isdigit() else n["id"]) for n in notes]
+            return (
+                200,
+                [dict(n, id=int(n["id"]) if n["id"].isdigit() else n["id"]) for n in notes],
+                {},
+            )
         if url not in gl_data:
             raise HttpError(method, url, 404, "404 Not Found")
         nxt = {"x-next-page-cursor": "c2"} if f"{url}?cursor=c2" in gl_data else {}
