@@ -9,6 +9,10 @@ Usage:
   upstream.py read     [--tracked FILE] [--dry-run] [--now ISO-8601]
   upstream.py plan     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
   upstream.py send     [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]
+  upstream.py verify-matrix [--tracked FILE]
+  upstream.py verify   [--tracked FILE] ITEM --ns3 DIR --out FILE
+  upstream.py verify-record [--tracked FILE] --results DIR --run-url URL [--dry-run]
+  upstream.py lifecycle [--tracked FILE] [--dry-run] [--now ISO-8601]
   upstream.py --self-test
 
 `tracked.toml` is the register: one `[[item]]` per upstream report, keyed by
@@ -55,6 +59,15 @@ plan      Without any secret: lists what would be posted. The text comes only
           `ready=true|false` to $GITHUB_OUTPUT.
 send      In the `gitlab-write` environment: recomputes the plan and posts
           every ready post, then links it back with an `upstream-sent` marker.
+verify    P1: an item's `reproduce` table (`modules`, `files` pinned to a
+          swarm-routing commit, optional `setup`, `run`, `expect` = `exit N` or
+          `output TEXT`) run in an ns-3-dev `master` tree; `verify-record`
+          comments the result with an `upstream-verified` marker, the evidence
+          plan reads besides `verified` in tracked.toml.
+lifecycle P6: a merged MR of ours whose commit an `ns-3.X` tag contains: "fixed
+          in ns-3.X" on the ticket, one issue per `workarounds` entry (with the
+          org bot's token, BOT_TOKEN), and the RCAPA ticket closed once all of
+          them are closed.
 
 GitHub is reached with GITHUB_TOKEN (the workflow's, issues: write) and
 GitLab with GITLAB_TOKEN (an environment secret; read_api for gitlab-read,
@@ -64,7 +77,9 @@ ADR-0014).
 """
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -94,7 +109,10 @@ ITEM_KEYS = (
     "draft",
     "verified",
     "gate",
+    "reproduce",
+    "workarounds",
 )
+RELEASE_TAG = re.compile(r"ns-3\.\d+(?:\.\d+)?")
 GATES = ("veto-window", "auto", "approve")
 ALLOWED_PROJECT = "nsnam/ns-3-dev"  # the only GitLab project the bridge writes to
 HOLD = "hold"  # the label that stops every post of a mirror ticket
@@ -205,6 +223,13 @@ def validate(cfg):
             isinstance(x, str) and GH_REF.fullmatch(x) for x in d
         ):
             errors.append(f"{where}: draft is not a list of swarm-routing/<repo>#N")
+        if "reproduce" in it:
+            errors += validate_reproduce(where, it["reproduce"])
+        w = it.get("workarounds", [])
+        if not isinstance(w, list) or not all(
+            isinstance(x, str) and GH_REF.fullmatch(x) for x in w
+        ):
+            errors.append(f"{where}: workarounds is not a list of swarm-routing/<repo>#N")
         if "gate" in it and it["gate"] not in GATES:
             errors.append(f"{where}: gate is not one of {', '.join(GATES)}")
         v = it.get("verified", {})
@@ -338,6 +363,10 @@ class GitLab:
                 return n["id"]
         return None
 
+    def commit_tags(self, sha):
+        """The tags that contain a commit (public, no token needed)."""
+        return self._get(f"{self.api}/repository/commits/{sha}/refs?type=tag&per_page=100") or []
+
     def create_issue(self, title, description):
         got = self._post(f"{self.api}/issues", {"title": title, "description": description})
         return got["iid"], got["web_url"]
@@ -402,6 +431,22 @@ class GitHub:
 
     def add_comment(self, n, body):
         return self._call("POST", f"repos/{self.repo}/issues/{n}/comments", {"body": body})
+
+    # other repositories of the org (P6, with the org bot's token)
+    def create_issue_in(self, repo, title, body):
+        return self._call("POST", f"repos/{repo}/issues", {"title": title, "body": body})
+
+    def issue_state(self, ref):
+        repo, _, n = ref.partition("#")
+        return (self._call("GET", f"repos/{repo}/issues/{n}") or {}).get("state")
+
+    def comment_in(self, repo, n, body):
+        return self._call("POST", f"repos/{repo}/issues/{n}/comments", {"body": body})
+
+    def close(self, repo, n):
+        return self._call(
+            "PATCH", f"repos/{repo}/issues/{n}", {"state": "closed", "state_reason": "completed"}
+        )
 
 
 # --- markers and text ----------------------------------------------------------
@@ -840,7 +885,7 @@ def candidates(cfg, root, it, comments, now):
             problems.append(str(e))
         if it["state"] != "draft":
             problems.append(f"{it['id']} is {it['state']}, not a draft: a report is filed once")
-        v = it.get("verified") or {}
+        v = evidence(cfg, it, comments)
         when = v.get("date")
         if not when or now - parse_time(f"{when}T00:00:00Z") > timedelta(days=EVIDENCE_DAYS):
             problems.append(
@@ -1050,6 +1095,234 @@ def cmd_send(cfg, gh, gl, root, now):
     return lines or ["nothing ready"]
 
 
+# --- P1 verify and P6 lifecycle -------------------------------------------------
+
+
+def evidence(cfg, it, comments):
+    """The newest P1 evidence of an item: `verified` in tracked.toml, or the verify
+    workflow's `upstream-verified` marker on the mirror ticket; {} if none."""
+    best = dict(it.get("verified") or {})
+    bot = cfg.get("bot", "github-actions[bot]")
+    for c in comments:
+        v = first_line_marker(c.get("body"), "upstream-verified")
+        if not v or (c.get("user") or {}).get("login") != bot:
+            continue
+        got = dict(x.split("=", 1) for x in v.split() if "=" in x)
+        if got.get("result") == "reproduces" and got.get("date", "") > best.get("date", ""):
+            best = got
+    return best
+
+
+RAW = re.compile(
+    r"https://raw\.githubusercontent\.com/swarm-routing/[A-Za-z0-9_.-]+/[0-9a-f]{40}/\S+"
+)
+
+
+def validate_reproduce(where, r):
+    """What is wrong with an item's `reproduce` table."""
+    if not isinstance(r, dict):
+        return [f"{where}: reproduce is not a table"]
+    errors = [
+        f"{where}: reproduce.{k} is not one of modules, files, setup, run, expect"
+        for k in r
+        if k not in ("modules", "files", "setup", "run", "expect")
+    ]
+    if not re.fullmatch(r"[a-z0-9-]+(;[a-z0-9-]+)*", str(r.get("modules", ""))):
+        errors.append(f"{where}: reproduce.modules is not a ;-separated list of ns-3 modules")
+    files = r.get("files", {})
+    if not isinstance(files, dict) or not all(
+        re.fullmatch(r"(scratch|contrib)/[A-Za-z0-9_./-]+", k)
+        and ".." not in k
+        and RAW.fullmatch(str(v))
+        for k, v in files.items()
+    ):
+        errors.append(
+            f"{where}: reproduce.files maps scratch/ or contrib/ paths to raw.githubusercontent.com "
+            "swarm-routing URLs pinned to a commit"
+        )
+    if not isinstance(r.get("run"), str) or not r["run"].strip():
+        errors.append(f"{where}: reproduce.run is missing")
+    if not re.fullmatch(r"(exit \d+|output .+)", str(r.get("expect", ""))):
+        errors.append(f"{where}: reproduce.expect is `exit N` or `output TEXT`")
+    return errors
+
+
+def contained(base, path):
+    """`path` resolved, refused unless it lies inside `base` (no traversal, no symlink out)."""
+    root = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(root, path))
+    if os.path.commonpath([root, full]) != root:
+        raise SystemExit(f"refused: {path} is outside {base}")
+    return full
+
+
+def cmd_verify(cfg, item_id, ns3, fetch=None, shell=None, out_base=None):
+    """P1: put the reproducer into the ns-3-dev tree at `ns3`, configure, build, run; the
+    result (reproduces / not reproduced / error) and the master commit go to out_path."""
+    import subprocess
+
+    it = next(i for i in cfg["item"] if i["id"] == item_id)
+    r = it["reproduce"]
+    fetch = fetch or (lambda url: urllib.request.urlopen(url, timeout=60).read())
+    shell = shell or (
+        lambda cmd, timeout: subprocess.run(
+            ["bash", "-c", cmd], cwd=ns3, capture_output=True, text=True, timeout=timeout
+        )
+    )
+    # the result's name comes from the register, never from an argument
+    out_dir = os.path.join(out_base or os.getcwd(), "results")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, it["id"] + ".json")
+    for rel, url in sorted(r.get("files", {}).items()):
+        path = contained(ns3, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(fetch(url))
+    master = shell("git rev-parse HEAD", 60).stdout.strip()
+    steps = []
+    if r.get("setup"):
+        steps.append(r["setup"])
+    steps += [
+        "./ns3 configure -d default --enable-examples --enable-tests --disable-werror "
+        f"--enable-modules='{r['modules']}'",
+        "./ns3 build",
+    ]
+    result = "error"
+    for step in steps:
+        p = shell(step, 3600)
+        if p.returncode != 0:
+            result, detail = "error", f"`{step}` exited {p.returncode}: {p.stderr[-500:]}"
+            break
+    else:
+        p = shell(r["run"], 3600)
+        kind, _, want = r["expect"].partition(" ")
+        seen = p.returncode == int(want) if kind == "exit" else want in (p.stdout + p.stderr)
+        result = "reproduces" if seen else "not-reproduced"
+        detail = f"`{r['run']}` exited {p.returncode}"
+    got = {"item": item_id, "master": master, "result": result, "detail": detail}
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(got, f)
+    print(f"{item_id}: {result} on master {master[:12]} ({detail})")
+    return got
+
+
+def cmd_verify_record(cfg, gh, results, run_url, now):
+    """Comment each P1 result on its mirror ticket, with the marker plan reads."""
+    issues = gh.issues()
+    lines = []
+    for got in results:
+        it = next(i for i in cfg["item"] if i["id"] == got["item"])
+        t = find_ticket(gh, cfg, it, issues)
+        if t is None:
+            lines.append(f"{it['id']}: no mirror ticket yet")
+            continue
+        day = now.strftime("%Y-%m-%d")
+        marker = (
+            f"<!-- upstream-verified: date={day} master={got['master']} run={run_url} "
+            f"result={got['result']} -->"
+        )
+        verdict = {
+            "reproduces": "the bug **reproduces** on ns-3-dev `master`",
+            "not-reproduced": "the bug **does not reproduce** on ns-3-dev `master`: check "
+            "whether it was fixed upstream before anything is sent",
+            "error": "the reproducer **could not run**",
+        }[got["result"]]
+        gh.add_comment(
+            t["number"],
+            f"{marker}\n**P1 verify** ({day}): {verdict} "
+            f"(commit `{got['master'][:12]}`; {got['detail']}). [Run]({run_url}).{FOOTER}",
+        )
+        lines.append(f"{it['id']}: recorded {got['result']} on #{t['number']}")
+    return lines
+
+
+def cmd_lifecycle(cfg, gl, gh, now, gh_org=None):
+    """P6: a merged merge request of ours whose commit is in an ns-3 release tag sets
+    'fixed in ns-3.X' on the ticket and opens one issue per workaround (gh_org: a client
+    for other repositories, the org bot's token); once every one of them is closed, the
+    RCAPA ticket is closed. Without gh_org it says what is waiting for the token."""
+    issues = gh.issues()
+    lines = []
+    for it in cfg.get("item", []):
+        t = find_ticket(gh, cfg, it, issues)
+        if t is None:
+            continue
+        comments = gh.comments(t["number"])
+        released = None
+        for c in comments:
+            v = first_line_marker(c.get("body"), "upstream-released")
+            if v and (c.get("user") or {}).get("login") == cfg.get("bot", "github-actions[bot]"):
+                released = v
+        if released is None:
+            for mr in it.get("merge_requests", []):
+                st = gl.item("!", mr)
+                sha = st.get("merge_commit_sha") or st.get("squash_commit_sha")
+                if st.get("state") != "merged" or not sha:
+                    continue
+                tags = sorted(
+                    (x["name"] for x in gl.commit_tags(sha) if RELEASE_TAG.fullmatch(x["name"])),
+                    key=lambda n: [int(p) for p in n[5:].split(".")],
+                )
+                if tags:
+                    released = f"{tags[0]} !{mr} {sha}"
+                    gh.add_comment(
+                        t["number"],
+                        f"<!-- upstream-released: {released} -->\n**Fixed in {tags[0]}**: "
+                        f"[!{mr}]({web_url(cfg['gitlab_project'], '!', mr)}) merged as `{sha[:12]}`, "
+                        f"which the release tag contains.{FOOTER}",
+                    )
+                    lines.append(f"{it['id']}: fixed in {tags[0]}")
+                    break
+        if released is None:
+            continue
+        opened = [
+            first_line_marker(c.get("body"), "upstream-workaround")
+            for c in comments
+            if first_line_marker(c.get("body"), "upstream-workaround")
+        ]
+        todo = [
+            w for w in it.get("workarounds", []) if not any(o.startswith(w + " ") for o in opened)
+        ]
+        if todo and gh_org is None:
+            lines.append(
+                f"{it['id']}: workaround issues wait for the org bot's token: {', '.join(todo)}"
+            )
+            continue
+        tag = released.split()[0]
+        for w in todo:
+            repo, _, num = w.partition("#")
+            got = gh_org.create_issue_in(
+                repo,
+                f"Remove the {it['id']} workaround: fixed in {tag}",
+                f"{it['id']} ({it.get('rcapa', '')}) is fixed in {tag}. Remove the workaround "
+                f"{w} names, then close this issue; the RCAPA ticket closes when every "
+                f"workaround issue is closed (PROC-001).\n\nMirror ticket: "
+                f"https://github.com/{gh.repo}/issues/{t['number']}{FOOTER}",
+            )
+            gh.add_comment(
+                t["number"],
+                f"<!-- upstream-workaround: {w} {repo}#{got['number']} -->\n"
+                f"Opened {repo}#{got['number']} to remove the workaround of {w}.{FOOTER}",
+            )
+            opened.append(f"{w} {repo}#{got['number']}")
+            lines.append(f"{it['id']}: opened {repo}#{got['number']}")
+        if gh_org is None or not it.get("rcapa"):
+            continue
+        refs_open = [o.split()[1] for o in opened]
+        states = [gh_org.issue_state(r) for r in refs_open]
+        repo, _, num = it["rcapa"].partition("#")
+        if all(s == "closed" for s in states) and gh_org.issue_state(it["rcapa"]) == "open":
+            gh_org.comment_in(
+                repo,
+                int(num),
+                f"Fixed in {tag}, and every workaround issue is closed "
+                f"({', '.join(refs_open) or 'none listed'}): closing (PROC-001).{FOOTER}",
+            )
+            gh_org.close(repo, int(num))
+            lines.append(f"{it['id']}: closed {it['rcapa']}")
+    return lines or ["nothing released"]
+
+
 # --- command line --------------------------------------------------------------
 
 
@@ -1075,14 +1348,30 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--self-test", action="store_true")
     sub = p.add_subparsers(dest="cmd")
-    for name in ("validate", "lint", "read", "plan", "send"):
+    for name in (
+        "validate",
+        "lint",
+        "read",
+        "plan",
+        "send",
+        "verify-matrix",
+        "verify",
+        "verify-record",
+        "lifecycle",
+    ):
         s = sub.add_parser(name)
         s.add_argument("--tracked", default=TRACKED)
         if name in ("lint", "plan", "send"):
             s.add_argument("--root", default=ROOT)
-        if name in ("read", "plan", "send"):
+        if name in ("read", "plan", "send", "verify-record", "lifecycle"):
             s.add_argument("--dry-run", action="store_true")
             s.add_argument("--now")
+        if name == "verify":
+            s.add_argument("item")
+            s.add_argument("--ns3", required=True)
+        if name == "verify-record":
+            s.add_argument("--results", required=True)
+            s.add_argument("--run-url", required=True)
     a = p.parse_args(argv)
     if a.self_test:
         return self_test()
@@ -1099,6 +1388,15 @@ def main(argv=None):
             print(x)
         print(f"reports/, replies/: {len(problems)} problem(s)")
         return 1 if problems else 0
+    if a.cmd == "verify-matrix":
+        ids = [
+            i["id"] for i in cfg.get("item", []) if i.get("reproduce") and i["state"] != "closed"
+        ]
+        write_output({"items": json.dumps(ids)}, f"verify: {', '.join(ids) or 'nothing'}\n")
+        return 0
+    if a.cmd == "verify":
+        got = cmd_verify(cfg, a.item, a.ns3)
+        return 0 if got["result"] != "error" else 1
     gh, gl = clients(cfg, a.dry_run)
     gl.dry = a.dry_run
     now = parse_time(a.now) if a.now else datetime.now(timezone.utc)
@@ -1108,6 +1406,19 @@ def main(argv=None):
         lines, ready = cmd_plan(cfg, gh, a.root, now)
         write_output({"ready": "true" if ready else "false"}, "\n".join(lines) + "\n")
         lines = []
+    elif a.cmd == "verify-record":
+        results = []
+        base = contained(os.getcwd(), a.results)
+        for name in sorted(os.listdir(base)):
+            if not re.fullmatch(r"NS3-\d{3}\.json", name):
+                continue
+            with open(contained(base, name), encoding="utf-8") as f:
+                results.append(json.load(f))
+        lines = cmd_verify_record(cfg, gh, results, a.run_url, now)
+    elif a.cmd == "lifecycle":
+        org = os.environ.get("BOT_TOKEN") or None
+        gh_org = GitHub(gh.repo, org, dry_run=a.dry_run) if org else None
+        lines = cmd_lifecycle(cfg, gl, gh, now, gh_org)
     else:
         lines = cmd_send(cfg, gh, gl, a.root, now)
     for line in lines:
@@ -1731,6 +2042,187 @@ draft = ["swarm-routing/ns3-containers#55"]
             "an invalid gate is refused",
             any("gate is not one of" in e for e in validate(dict(cfg, gate="sometimes"))),
         )
+
+    # P1 verify: the reproducer table, a run with a fake shell, the evidence plan reads
+    good_r = {
+        "modules": "core;network;internet;aodv",
+        "files": {
+            "scratch/c/c.cc": "https://raw.githubusercontent.com/swarm-routing/ns3-containers/"
+            + "c" * 40
+            + "/test/fixtures/manet-canary/manet-canary.cc"
+        },
+        "run": "timeout 120 ./ns3 run --no-build 'c --protocol=aodv'",
+        "expect": "exit 124",
+    }
+    check("a reproducer table is valid", validate_reproduce("X", good_r) == [])
+    for name, patch, want in (
+        ("unpinned file", {"files": {"scratch/c.cc": "https://example.com/c.cc"}}, "pinned"),
+        (
+            "path out of the tree",
+            {"files": {"scratch/../x": good_r["files"]["scratch/c/c.cc"]}},
+            "pinned",
+        ),
+        ("bad expect", {"expect": "hangs"}, "expect"),
+        ("bad modules", {"modules": "core network"}, "modules"),
+    ):
+        check(
+            f"reproducer refused: {name}",
+            any(want in e for e in validate_reproduce("X", {**good_r, **patch})),
+        )
+
+    class Proc:
+        def __init__(self, rc, out=""):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+
+    vcfg = {
+        "gitlab_project": proj,
+        "item": [{"id": "NS3-001", "state": "draft", "title": "t", "reproduce": good_r}],
+    }
+    with tempfile.TemporaryDirectory() as ns3:
+        ran = []
+
+        def shell_for(run_rc, fail=None):
+            def sh(cmd, timeout):
+                ran.append(cmd)
+                if cmd.startswith("git rev-parse"):
+                    return Proc(0, "8ec9b4a190b52dadb5a3c35572dec687e1b75379\n")
+                if fail and cmd.startswith(fail):
+                    return Proc(2)
+                return Proc(run_rc if cmd == good_r["run"] else 0)
+
+            return sh
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = cmd_verify(
+                vcfg,
+                "NS3-001",
+                ns3,
+                fetch=lambda u: b"// code\n",
+                shell=shell_for(124),
+                out_base=ns3,
+            )
+            miss = cmd_verify(
+                vcfg, "NS3-001", ns3, fetch=lambda u: b"x", shell=shell_for(0), out_base=ns3
+            )
+            err = cmd_verify(
+                vcfg,
+                "NS3-001",
+                ns3,
+                fetch=lambda u: b"x",
+                shell=shell_for(0, "./ns3 build"),
+                out_base=ns3,
+            )
+        check(
+            "P1: the reproducer runs in the tree, its expected exit is 'reproduces'",
+            got["result"] == "reproduces"
+            and got["master"].startswith("8ec9b4a1")
+            and os.path.exists(os.path.join(ns3, "scratch/c/c.cc"))
+            and os.path.exists(os.path.join(ns3, "results", "NS3-001.json"))
+            and any("--enable-modules='core;network;internet;aodv'" in c for c in ran),
+        )
+        check("P1: another exit is 'not-reproduced'", miss["result"] == "not-reproduced")
+        check(
+            "paths are contained: no file or result outside its directory",
+            refused(lambda: contained(ns3, "../x"), "outside")
+            and refused(lambda: contained(ns3, "/etc/passwd"), "outside")
+            and contained(ns3, "scratch/a.cc").startswith(os.path.realpath(ns3)),
+        )
+        check("P1: a failed build is 'error', the run is not attempted", err["result"] == "error")
+    fv = FakeGitHub()
+    gv = GitHub("o/r", "t", fv.transport)
+    cmd_read(cfg, gl, gv, now)
+    lines = cmd_verify_record(
+        cfg, gv, [dict(got, item="NS3-001")], "https://github.com/o/r/actions/runs/9", now
+    )
+    t1v = next(n for n, i in fv.issues.items() if "NS3-001" in i["title"])
+    ev = evidence({"bot": "github-actions[bot]"}, {"id": "NS3-001"}, fv.comments[t1v])
+    check(
+        "P1: the result is recorded on the ticket and becomes the evidence plan reads",
+        lines == [f"NS3-001: recorded reproduces on #{t1v}"]
+        and ev.get("date") == "2026-11-16"
+        and ev.get("master", "").startswith("8ec9b4a1"),
+    )
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "reports"))
+        with open(os.path.join(root, "reports", "NS3-001.md"), "w", encoding="utf-8") as f:
+            f.write("# A title\n\nA body.\n")
+        c2 = dict(cfg, item=[dict(i) for i in cfg["item"]])
+        c2["item"][1].pop("verified", None)
+        lines, _ = cmd_plan(c2, gv, root, now)
+        check(
+            "P1 evidence from the ticket lets a report be scheduled",
+            "publish NS3-001: scheduled for 2026-11-18T12:00:00Z" in lines,
+        )
+
+    # P6 lifecycle: a merged MR's commit in a release tag; workaround issues; the RCAPA ticket
+    sha = "d" * 40
+    gl_data[f"{api}/merge_requests/2985"] = dict(
+        load("mr-2985.json"), state="merged", merge_commit_sha=sha
+    )
+    gl_data[f"{api}/repository/commits/{sha}/refs?type=tag&per_page=100"] = [
+        {"type": "tag", "name": "ns-3.51"},
+        {"type": "tag", "name": "ns-3.50"},
+        {"type": "tag", "name": "ns-3-dev-snapshot"},
+    ]
+    lcfg = dict(cfg, item=[dict(cfg["item"][0], workarounds=["swarm-routing/ns3-containers#35"])])
+    check("workarounds is a valid register field", validate(lcfg) == [])
+    fl = FakeGitHub()
+    gl6 = GitHub("o/r", "t", fl.transport)
+    cmd_read(lcfg, gl, gl6, now)
+    t3l = next(n for n, i in fl.issues.items() if "NS3-003" in i["title"])
+    lines = cmd_lifecycle(lcfg, gl, gl6, now)
+    check(
+        "P6: the earliest release tag with the merge commit, said once on the ticket",
+        lines[0] == "NS3-003: fixed in ns-3.50"
+        and fl.comments[t3l][-1]["body"].startswith(
+            f"<!-- upstream-released: ns-3.50 !2985 {sha} -->"
+        )
+        and "wait for the org bot's token: swarm-routing/ns3-containers#35" in lines[1],
+    )
+
+    class FakeOrg:
+        def __init__(self):
+            self.issues = {("swarm-routing/ns3-tools", 240): "open"}
+            self.calls = []
+
+        def transport(self, method, url, headers, body=None):
+            self.calls.append((method, url, body))
+            m = re.match(
+                rf"{GITHUB_API}/repos/(swarm-routing/[^/]+)/issues(?:/(\d+))?(/comments)?$", url
+            )
+            repo, n = m.group(1), m.group(2)
+            if method == "POST" and not n:
+                n = 100 + len(self.issues)
+                self.issues[(repo, n)] = "open"
+                return 201, {"number": n}
+            if method == "PATCH":
+                self.issues[(repo, int(n))] = body["state"]
+                return 200, {}
+            if method == "POST":
+                return 201, {"id": 1}
+            return 200, {"state": self.issues[(repo, int(n))]}
+
+    fo = FakeOrg()
+    org = GitHub("o/r", "bot", fo.transport)
+    lines = cmd_lifecycle(lcfg, gl, gl6, now, org)
+    opened = [k for k in fo.issues if k[0] == "swarm-routing/ns3-containers"]
+    check(
+        "P6: one issue per workaround, recorded on the ticket; the RCAPA ticket stays open",
+        len(opened) == 1
+        and any(x.startswith("NS3-003: opened swarm-routing/ns3-containers#") for x in lines)
+        and fo.issues[("swarm-routing/ns3-tools", 240)] == "open",
+    )
+    n_calls = len([c for c in fo.calls if c[0] != "GET"])
+    cmd_lifecycle(lcfg, gl, gl6, now, org)
+    check("P6: nothing opened twice", len([c for c in fo.calls if c[0] != "GET"]) == n_calls)
+    fo.issues[opened[0]] = "closed"
+    lines = cmd_lifecycle(lcfg, gl, gl6, now, org)
+    check(
+        "P6: every workaround issue closed, the RCAPA ticket is closed",
+        fo.issues[("swarm-routing/ns3-tools", 240)] == "closed"
+        and "NS3-003: closed swarm-routing/ns3-tools#240" in lines,
+    )
+    gl_data[f"{api}/merge_requests/2985"] = load("mr-2985.json")
 
     # the command line: validate and a dry read of the repository's own register run offline
     with tempfile.TemporaryDirectory() as d:

@@ -90,7 +90,7 @@ actionlint .github/workflows/*.yml
 | `dco.yml` | outside contributors' sign-off | no |
 | `scorecard.yml` | OpenSSF Scorecard | no |
 | `sync-labels.yml` | the org's labels | no |
-| `read.yml`, `send.yml` | the bridge itself (schedule, merges) | no |
+| `read.yml`, `send.yml`, `verify.yml`, `lifecycle.yml` | the bridge itself (schedules, merges) | no |
 
 The "yes" rows are required once swarm-routing/.github's `repo-settings`
 applies this repository's `[settings]` (dispatched right after the first

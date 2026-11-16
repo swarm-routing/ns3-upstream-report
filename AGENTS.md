@@ -7,7 +7,7 @@ before changing anything. Org-wide conventions:
 
 ## What this repo is
 
-**Status (2026-11-16): design decided (ADR-0002, #2); P2 read and P3/P4 send run; P1, P5, P6, P7 in progress (#2).**
+**Status (2026-11-16): design decided (ADR-0002, #2); P0–P4 and P6 run; P5 and P7 in progress (#2).**
 
 The org's bridge to ns-3's GitLab (https://gitlab.com/nsnam/ns-3-dev), with
 no manual step: one **mirror ticket** per upstream report (an `NS3-NNN` bug of
@@ -25,6 +25,8 @@ reports/                     P0: NS3-NNN.md, a report, first line `# <GitLab tit
 replies/                     P0/P4: NS3-NNN/<note-id>.md, a reply to that mirrored GitLab note (README.md there)
 .github/workflows/read.yml   P2, every 6 h + dispatch, environment gitlab-read
 .github/workflows/send.yml   P3/P4: plan (no secret) -> send (environment gitlab-write), hourly and on a merge
+.github/workflows/verify.yml P1: weekly, each item's reproducer on ns-3-dev master in the ns3-dev toolchain; results on the tickets
+.github/workflows/lifecycle.yml   P6: daily, fixed-in-release, workaround issues (org bot token), RCAPA ticket closed
 .github/ISSUE_TEMPLATE/upstream-report.yml   the mirror ticket's form
 docs/adr/0002-…              the zero-manual design, the guards, the identity risk, D1–D5
 ```
