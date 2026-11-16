@@ -14,10 +14,11 @@ on:
     - cron: '41 */6 * * *'
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Read only; print the GitHub writes instead of making them
-        type: boolean
-        default: false
+      mode:
+        description: 'dry-run (the default: print the writes, make none) or scheduled (a real run, as the schedule makes; what the org-bot backstop sends, swarm-routing/.github backstop.yml)'
+        type: choice
+        options: [dry-run, scheduled]
+        default: dry-run
 
 permissions: {}
 
@@ -45,7 +46,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'scheduled' && 'true' || 'false' }}
         run: |
           if [ "$DRY_RUN" = true ]; then
             upstream read --dry-run

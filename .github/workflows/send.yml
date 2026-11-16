@@ -20,10 +20,11 @@ on:
     paths: ['reports/**', 'replies/**', 'tracked.toml']
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Plan and send nothing; print the writes instead
-        type: boolean
-        default: false
+      mode:
+        description: 'dry-run (the default: print the writes, make none) or scheduled (a real run, as the schedule makes; what the org-bot backstop sends, swarm-routing/.github backstop.yml)'
+        type: choice
+        options: [dry-run, scheduled]
+        default: dry-run
 
 permissions: {}
 
@@ -56,7 +57,7 @@ jobs:
         name: Check the guards, schedule, say what is due
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'scheduled' && 'true' || 'false' }}
         run: |
           if [ "$DRY_RUN" = true ]; then
             upstream plan --dry-run
@@ -66,7 +67,7 @@ jobs:
 
   send:
     needs: plan
-    if: needs.plan.outputs.ready == 'true' && !inputs.dry_run
+    if: needs.plan.outputs.ready == 'true' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'scheduled')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: gitlab-write

@@ -54,7 +54,7 @@ env -u GITHUB_TOKEN -u GITLAB_TOKEN ./upstream read --dry-run   # live GitLab, p
 
 Never run `read`, `plan`, `send`, `maintain` or `rotate` without
 `--dry-run` locally: the workflows do that. Never dispatch `send`,
-`maintain` or `rotate` without `dry_run`: they run on their schedules.
+`maintain` or `rotate` with `mode: scheduled`: they run on their schedules (and the org-bot backstop, swarm-routing/.github `backstop.yml`, #33). A manual dispatch is a dry run by default.
 
 ## Golden rules (invariants — do not break)
 
