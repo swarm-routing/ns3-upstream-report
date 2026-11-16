@@ -1,11 +1,14 @@
 # org-sync configuration (swarm-routing/.github tools/org-sync).
 kind = "python"
+# the tool is Go (swarm-routing/.github docs/adr/0002-pipelines-are-go.md); org-sync has no Go kind,
+# so the Python badge is left out and the Go badge is this repository's own
+badges = ["ci", "release", "doi", "cite", "vcpkg", "pypi", "licence", "conventional", "arena", "scorecard", "bestpractices", "rcapa", "ns3-bugs"]
 title = "ns3-upstream-report"
-dual = ["tools/"]
+dual = ["tools/", "cmd/", "internal/"]
 python = "3.11"
 # the org's issue forms, copied: this repository has its own form (upstream-report.yml)
 forms = true
-posture = "the org's bridge to ns-3's GitLab: a stdlib Python tool and three workflows, no simulation code"
+posture = "the org's bridge to ns-3's GitLab: one Go tool (cmd/upstream) and its workflows, no simulation code"
 description = """
 The bridge between the swarm-routing org and ns-3's GitLab
 (https://gitlab.com/nsnam/ns-3-dev). Each upstream report (an ns-3 bug with
@@ -16,7 +19,7 @@ as a pull request, CI checks it, P2 read mirrors GitLab every 6 h, and P3/P4
 send a merged text after a veto window that the `hold` label stops."""
 trust_boundary = """
 Two inputs are untrusted. **GitLab notes** (anyone on gitlab.com can write
-one) are quoted into mirror-ticket comments by `tools/upstream/upstream.py`:
+one) are quoted into mirror-ticket comments by the bridge (`cmd/upstream`):
 it never executes them, neutralises hidden-comment markers, `@mentions` and
 `#N` links before quoting, and reads its own markers only from the first line
 of comments the workflow's bot wrote. **Text bound for GitLab** comes only
@@ -31,9 +34,10 @@ limitations = """
 - **A reviewed mistake can still go out.** A text that passes its pull
   request and the guards is sent when its veto window ends, unless someone
   labels the ticket `hold`.
-- **The read token is readable by the read job.** `gitlab-read`'s token is
-  exposed to the code on `main` that the scheduled job runs; give it
-  `read_api` only.
+- **One token reads and writes.** By the maintainer's decision (2026-11-16)
+  the one GitLab token (scope `api`) is in both environments; the read and
+  lifecycle pipelines are built without the GitLab write client, and P7
+  rotates the token every 60 days with a 90-day expiry.
 - **The bridge does not judge content.** It checks references, scope, rate
   and evidence, not whether a report is right; P1 verify and the review of
   the pull request do that."""
@@ -41,6 +45,12 @@ verifying = """
 Nothing is released: the workflows run from `main`. Every post is announced
 on its mirror ticket (an `upstream-scheduled` comment with its exact text)
 and linked back after it is sent (an `upstream-sent` comment)."""
+
+[[extra_badges]]
+group = "stack"
+alt = "Go 1.27"
+image = "https://img.shields.io/badge/go-1.27-blue?logo=go"
+link = "go.mod"
 
 [docs]
 arena_id = ""  # its id in swarm-routing.github.io site/hub/projects.json, once listed
@@ -51,7 +61,7 @@ description = "The swarm-routing org's bridge to ns-3's GitLab: a mirror ticket 
 homepage = ""
 topics = ["ns-3", "gitlab", "issue-tracking", "automation", "swarm-intelligence"]
 ruleset = "tooling"
-required_checks = ["python / python", "workflows", "headers / licence", "check / org-sync", "title / title", "review / coderabbit"]
+required_checks = ["go / go", "workflows", "headers / licence", "check / org-sync", "title / title", "review / coderabbit"]
 # Merge through a merge queue (swarm-routing/.github#130); every workflow behind a required
 # check also runs on merge_group.
 merge_queue = true

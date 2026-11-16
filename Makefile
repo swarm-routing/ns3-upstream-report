@@ -21,17 +21,19 @@ ORG_REF   ?= main
 help: ## list the targets
 	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z0-9_-]+:.*## /{printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## nothing to build: a stdlib Python tool; validates the register
-	python3 -I tools/upstream/upstream.py validate
+build: ## the Go tool (build/upstream, static, -trimpath); validates the register
+	CGO_ENABLED=0 go build -trimpath -o build/upstream ./cmd/upstream
+	build/upstream validate
 
 test: ## the fast tests CI runs on every PR (fixtures, fake GitHub and GitLab: no token, no network)
-	python3 -I tools/upstream/upstream.py --self-test
+	go test ./...
 
-lint: org-tools ## static checks, no changes (the org ruff configuration, as CI)
-	ruff check --config "$(ORG_DIR)/ruff.toml" tools && ruff format --check --config "$(ORG_DIR)/ruff.toml" tools
+lint: ## static checks, no changes (gofmt, go vet; CI adds staticcheck and govulncheck)
+	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; echo "not gofmt-formatted"; exit 1; }
+	go vet ./...
 
-format: org-tools ## apply the formatters
-	ruff format --config "$(ORG_DIR)/ruff.toml" tools
+format: ## apply the formatters
+	gofmt -w cmd internal
 
 clean: ## remove build outputs
 	rm -rf build dist .coverage tools/upstream/__pycache__
@@ -45,7 +47,7 @@ org-tools:  # the same templates CI checks against: refreshed to ORG_REF every t
 	@git -C "$(ORG_DIR)" fetch -q --depth 1 origin $(ORG_REF) && git -C "$(ORG_DIR)" checkout -q --detach FETCH_HEAD
 
 headers: org-tools ## licence headers (org rule 1)
-	python3 -I "$(ORG_DIR)/tools/checks/check-headers.py" --dual tools/ .
+	python3 -I "$(ORG_DIR)/tools/checks/check-headers.py" --dual tools/ --dual cmd/ --dual internal/ .
 
 org-sync-check: org-tools ## org-managed files match the org templates
 	python3 -I "$(ORG_DIR)/tools/org-sync/org_sync.py" check .

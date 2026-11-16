@@ -1,0 +1,46 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: upstream
+description: >-
+  Builds the bridge's Go tool, cmd/upstream, as swarm-routing/.github's
+  docs/adr/0002-pipelines-are-go.md runs Go in Actions: actions/setup-go at the
+  version go.mod's toolchain line names, GOTOOLCHAIN=local, CGO_ENABLED=0
+  go build -trimpath; the binary goes to $RUNNER_TEMP/bin, on PATH as `upstream`.
+  No module or build cache: a job holding a token restores nothing another run
+  wrote. Callers give the step its timeout.
+inputs:
+  working-directory:
+    description: The checkout of this repository (where go.mod is)
+    required: false
+    default: '.'
+outputs:
+  path:
+    description: The binary
+    value: ${{ steps.build.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        v=$(sed -n 's/^toolchain go\([0-9][0-9.]*\)\s*$/\1/p' go.mod)
+        [ -n "$v" ] || { echo "::error file=go.mod::no toolchain line"; exit 1; }
+        echo "go=$v" >> "$GITHUB_OUTPUT"
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ steps.version.outputs.go }}
+        cache: false
+    - id: build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GOTOOLCHAIN: local
+        CGO_ENABLED: '0'
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/bin"
+        go build -trimpath -o "$RUNNER_TEMP/bin/upstream" ./cmd/upstream
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        echo "path=$RUNNER_TEMP/bin/upstream" >> "$GITHUB_OUTPUT"

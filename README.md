@@ -4,9 +4,9 @@
 | Group | Badges |
 | --- | --- |
 | Build | [![CI](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml/badge.svg)](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml) |
-| Release | [![Licence: GPL-2.0-only, tools/ MIT OR GPL-2.0-only](https://img.shields.io/badge/licence-GPL--2.0--only%2C%20tools%2F%20MIT%20OR%20GPL--2.0--only-blue)](LICENSING.md) |
+| Release | [![Licence: GPL-2.0-only, tools/ cmd/ internal/ MIT OR GPL-2.0-only](https://img.shields.io/badge/licence-GPL--2.0--only%2C%20tools%2F%20cmd%2F%20internal%2F%20MIT%20OR%20GPL--2.0--only-blue)](LICENSING.md) |
 | Trust | [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/swarm-routing/ns3-upstream-report/badge)](https://scorecard.dev/viewer/?uri=github.com/swarm-routing/ns3-upstream-report) |
-| Stack | [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python)](AGENTS.md) |
+| Stack | [![Go 1.27](https://img.shields.io/badge/go-1.27-blue?logo=go)](go.mod) |
 | Community & docs | [![Open RCAPA](https://img.shields.io/github/issues/swarm-routing/ns3-upstream-report/rcapa?label=open%20RCAPA&color=blue)](https://github.com/swarm-routing/ns3-upstream-report/blob/main/docs/rcapa/README.md) [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow)](https://www.conventionalcommits.org) |
 <!-- org-sync:end badges -->
 
@@ -20,11 +20,13 @@ side, and the reports and replies go out from here, each only after the
 maintainer approves it.
 
 **Status (2026-11-16): the design is decided
-([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md), #2).
-P2 read runs every 6 h; P0 draft, P1 verify (`verify.yml`), P3 publish and
-P4 reply (`send.yml`) and P6 lifecycle (`lifecycle.yml`) run with their
-guards; P5 MR maintenance and P7 credentials are being built (#2).** Nothing reaches GitLab until the
-maintainer has stored the GitLab tokens.
+([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md), #2),
+and every pipeline is one Go tool, `cmd/upstream`
+([ADR-0003](docs/adr/0003-the-bridge-is-go.md)). P2 read runs every 6 h;
+P0 draft, P1 verify (`verify.yml`), P3 publish and P4 reply (`send.yml`),
+P5 MR maintenance (`maintain.yml`), P6 lifecycle (`lifecycle.yml`) and P7
+credentials (`rotate.yml`) run with their guards.** The one GitLab token
+(scope `api`) is stored in both environments.
 
 ## How it works
 
@@ -93,26 +95,29 @@ sequenceDiagram
     S->>G: note in that thread, with the disclosure footer
     M->>P5: need_rebase, red pipeline or no reviewer
     P5->>G: rebase API on our merge request only
-    P5->>B: on a conflict, a PR here, then a push with Assisted-by Claude
+    P5->>B: on a conflict, a PR here with the series, Assisted-by Claude, and no push
     P5->>G: review request, at most once per 30 days
     G->>P6: merge request merged
     P6->>G: is the merge commit in a release tag
     P6->>R: workaround issues, then the RCAPA ticket closes
     P7->>P7: rotate the GitLab token every 60 days, store it with the org App
-    Note over H: once, create the two GitLab tokens
+    Note over H: once, create the GitLab token
 ```
 
 | Pipeline | Workflow | What it does |
 |----------|----------|--------------|
-| P0 draft | a pull request | an agent writes `reports/NS3-NNN.md` (first line `# <GitLab title>`) or `replies/NS3-NNN/<note-id>.md` from the RCAPA document; CI's `upstream.py lint` checks it |
-| P2 read | [`read.yml`](.github/workflows/read.yml), every 6 h | for every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none, fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request. Runs without a token (GitLab's public pages) |
+| P0 draft | a pull request | an agent writes `reports/NS3-NNN.md` (first line `# <GitLab title>`) or `replies/NS3-NNN/<note-id>.md` from the RCAPA document; CI's `upstream lint` checks it |
+| P2 read | [`read.yml`](.github/workflows/read.yml), every 6 h | for every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none, fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request; with the token, an issue 30 days before it expires. Runs without a token too (GitLab's public pages); built without the GitLab write client |
 | P1 verify | [`verify.yml`](.github/workflows/verify.yml), weekly and on a register change | for each open item with a `reproduce` table: builds ns-3-dev `master` with the `ns3-dev` toolchain, runs the reproducer, and records the result on the mirror ticket; a report is sent only after a "reproduces" from the last 7 days |
 | P6 lifecycle | [`lifecycle.yml`](.github/workflows/lifecycle.yml), daily | when an `ns-3.X` tag contains the merge commit of our merge request: "fixed in ns-3.X" on the ticket, one issue per workaround, and the RCAPA ticket closed when they are all closed |
 | P3 publish, P4 reply | [`send.yml`](.github/workflows/send.yml), hourly and on a merge | the plan job (no secret) checks the guards and schedules each post on its ticket with the exact text; the send job (environment `gitlab-write`) posts what is due and links it back |
+| P5 MR maintenance | [`maintain.yml`](.github/workflows/maintain.yml), daily | on our open merge requests: `need_rebase` → GitLab's rebase API after the 24 h window, once per head; a conflict → a pull request here with the merge request's series in `patches/NS3-NNN/<mr>/` (commit with `Assisted-by: Claude`), where it stops: the token has no `write_repository`, so nothing is pushed to GitLab; no reviewer 7 days after our last note → a fixed review request, at most once per 30 days |
+| P7 credentials | [`rotate.yml`](.github/workflows/rotate.yml), weekly | checks the org App can store the environment secrets (else an issue names the missing permission), then rotates the token once it is 60 days old (90-day expiry) and stores it in both environments |
 
 `tracked.toml` is the register and the allowlist: one `[[item]]` per report
 (its `NS3-NNN` id, title, state, RCAPA ticket, GitLab issue, merge requests,
-competing merge requests, mirror ticket, P1 evidence, optional `gate`), and
+competing merge requests, mirror ticket, P1 evidence and reproducer, workaround
+issues, optional `gate`), and
 the gate policy (`veto-window`, 24 h for a note, 48 h for a new issue). An
 item enters only by a reviewed pull request. Each mirror ticket links its
 RCAPA ticket in swarm-routing/ns3-tools, and the RCAPA ticket links back.
@@ -127,7 +132,7 @@ RCAPA ticket in swarm-routing/ns3-tools, and the RCAPA ticket links back.
   A separate agent identity is swarm-routing/.github#523.
 - **Text only from merged files.** Nothing in a comment is ever sent; every
   post was reviewed as a pull request and passed CI.
-- **Guards before every API call** (`tools/upstream/upstream.py`; a failure
+- **Guards before every API call** (`cmd/upstream`, `internal/`; a failure
   stops the post and comments why on the ticket): references (no bare `#N`,
   `!N` or `owner/repo#N` that GitLab would link to the wrong place; our items
   as full GitHub URLs, ns-3 items as `nsnam/ns-3-dev#N` or a full GitLab URL),
@@ -140,11 +145,14 @@ RCAPA ticket in swarm-routing/ns3-tools, and the RCAPA ticket links back.
 - **The veto window.** Each post is announced on its mirror ticket with its
   exact text, 24 h ahead (48 h for a new issue); the `hold` label stops it.
 - **The token lives in the environments**, never in a repository secret:
-  `gitlab-read` (`read_api`, optional) and `gitlab-write` (`api`,
-  `write_repository`), both deploying from `main` only, both code in
-  `.github/org-sync.toml`. Jobs holding the token run only `main`'s code, use
-  no third-party action, and every action is pinned by SHA; no workflow runs
-  on a fork's pull request with a secret.
+  one GitLab token, scope `api` (no `write_repository`; the maintainer's
+  decision of 2026-11-16), stored as `GITLAB_TOKEN` in `gitlab-read` and
+  `gitlab-write`, both deploying from `main` only, both code in
+  `.github/org-sync.toml`. Read and lifecycle are built without the GitLab
+  write client (a test enforces it); P7 rotates the token every 60 days.
+  Jobs holding the token run only `main`'s code, use only GitHub's own, the
+  org's and this repository's actions, and every action is pinned by SHA;
+  no workflow runs on a fork's pull request with a secret.
 - **GitLab text is data.** Notes quoted here are neutralised (no hidden
   markers, no `@mentions`, no `#N` links).
 

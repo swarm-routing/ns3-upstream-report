@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 name: send
 
-# P3 publish and P4 reply (tools/upstream/upstream.py plan, send): the text
+# P3 publish and P4 reply (cmd/upstream plan, send): the text
 # comes only from merged files, reports/NS3-NNN.md (a new GitLab issue) and
 # replies/NS3-NNN/<note-id>.md (a note in that note's thread). The plan job
 # has no secret: it checks every post against the guards (references,
@@ -49,6 +49,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - id: plan
         name: Check the guards, schedule, say what is due
         env:
@@ -56,9 +59,9 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
         run: |
           if [ "$DRY_RUN" = true ]; then
-            python3 -I tools/upstream/upstream.py plan --dry-run
+            upstream plan --dry-run
           else
-            python3 -I tools/upstream/upstream.py plan
+            upstream plan
           fi
 
   send:
@@ -71,12 +74,15 @@ jobs:
       contents: read
       issues: write
     steps:
-      # no third-party action in a job that holds the GitLab token
+      # only GitHub's own actions and this repository's in a job that holds the GitLab token
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - name: Post what is due, link it back
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-        run: python3 -I tools/upstream/upstream.py send
+        run: upstream send

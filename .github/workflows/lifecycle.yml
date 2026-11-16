@@ -4,7 +4,7 @@ name: lifecycle
 
 # P6 lifecycle (docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md): daily,
 # when a merge request of ours is merged upstream and an ns-3 release tag
-# contains its commit, say "fixed in ns-3.X" on the mirror ticket, open one
+# contains its commit (cmd/upstream lifecycle), say "fixed in ns-3.X" on the mirror ticket, open one
 # issue per workaround the register lists, and close the RCAPA ticket once
 # all of them are closed (PROC-001). GitLab is read without a token; the
 # issues in other repositories need the org bot's token (BOT_APP_ID and
@@ -31,6 +31,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build the bridge (cmd/upstream)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
       - id: bot
         uses: swarm-routing/.github/.github/actions/bot-token@c42e1e3f377099c980f04cee9a9148a344dd876e # main 2026-11-16
         with:
@@ -41,4 +44,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BOT_TOKEN: ${{ steps.bot.outputs.token }}
-        run: python3 -I tools/upstream/upstream.py lifecycle
+        run: upstream lifecycle

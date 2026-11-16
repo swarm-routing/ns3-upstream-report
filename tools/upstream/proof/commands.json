@@ -1,0 +1,14 @@
+[
+ ["validate"],
+ ["lint"],
+ ["verify-matrix"],
+ ["read", "--now", "2026-11-16T18:00:00Z"],
+ ["read", "--dry-run", "--now", "2026-11-16T18:00:00Z"],
+ ["plan", "--now", "2026-11-16T18:00:00Z"],
+ ["plan", "--dry-run", "--now", "2026-11-19T18:00:00Z"],
+ ["send", "--dry-run", "--now", "2026-11-19T18:00:00Z"],
+ ["send", "--dry-run", "--now", "2026-11-21T18:00:00Z"],
+ ["lifecycle", "--now", "2026-11-16T18:00:00Z"],
+ ["verify-record", "--results", "tools/upstream/proof/results", "--run-url", "https://github.com/swarm-routing/ns3-upstream-report/actions/runs/1", "--now", "2026-11-16T18:00:00Z"],
+ ["lifecycle", "--dry-run", "--now", "2026-11-16T18:00:00Z"]
+]
