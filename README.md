@@ -5,7 +5,7 @@
 | --- | --- |
 | Build | [![CI](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml/badge.svg)](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml) |
 | Release | [![Licence: GPL-2.0-only, cmd/ internal/ MIT OR GPL-2.0-only](https://img.shields.io/badge/licence-GPL--2.0--only%2C%20cmd%2F%20internal%2F%20MIT%20OR%20GPL--2.0--only-blue)](LICENSING.md) |
-| Trust | [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/swarm-routing/ns3-upstream-report/badge)](https://scorecard.dev/viewer/?uri=github.com/swarm-routing/ns3-upstream-report) |
+| Trust | [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/swarm-routing/ns3-upstream-report/badge)](https://scorecard.dev/viewer/?uri=github.com/swarm-routing/ns3-upstream-report) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16822/badge)](https://www.bestpractices.dev/projects/16822) |
 | Stack | [![Go 1.27](https://img.shields.io/badge/go-1.27-blue?logo=go)](go.mod) |
 | Community & docs | [![Open RCAPA](https://img.shields.io/github/issues/swarm-routing/ns3-upstream-report/rcapa?label=open%20RCAPA&color=blue)](https://github.com/swarm-routing/ns3-upstream-report/blob/main/docs/rcapa/README.md) [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow)](https://www.conventionalcommits.org) |
 <!-- org-sync:end badges -->
