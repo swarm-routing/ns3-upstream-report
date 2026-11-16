@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: Upstream report (mirror ticket)
+description: The mirror ticket of one report to ns-3's GitLab. Usually opened by the read workflow; open one by hand only for an item about to enter tracked.toml.
+title: "[upstream] NS3-NNN "
+labels: ["rcapa", "ns3"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One ticket per `NS3-NNN` bug of swarm-routing/ns3-tools `docs/ns3-bugs.md`. Nothing is written here to be sent: the report is `reports/NS3-NNN.md` and each reply `replies/NS3-NNN/<note-id>.md`, merged by pull request. Add the item to `tracked.toml` (with `mirror = <this issue's number>`) in that pull request.
+        Each post is announced here 24 h ahead (48 h for a new issue) with its exact text. Label this ticket `hold` to stop it.
+        Name GitLab items by their full URL here (a bare `#N` links this repository's issue N).
+  - type: input
+    id: ns3-id
+    attributes:
+      label: NS3 id
+      description: The register's id, e.g. NS3-004.
+    validations:
+      required: true
+  - type: input
+    id: rcapa
+    attributes:
+      label: RCAPA ticket
+      description: The RCAPA ticket, as `swarm-routing/ns3-tools#N`. Link this ticket back from it.
+    validations:
+      required: true
+  - type: textarea
+    id: gitlab
+    attributes:
+      label: GitLab
+      description: The full URLs of the GitLab issue and merge requests, if any exist yet.

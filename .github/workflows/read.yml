@@ -1,0 +1,49 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+name: read
+
+# Mirrors ns-3's GitLab into the mirror tickets (tools/upstream/upstream.py read):
+# every tracked issue's and merge request's state into the ticket's status
+# block, every new GitLab note as a comment, stalls flagged. Environment
+# gitlab-read (main only, no reviewer): its GITLAB_TOKEN (read_api) is
+# optional; without it the reader uses GitLab's public pages.
+on:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Read only; print the GitHub writes instead of making them
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: upstream-read
+  cancel-in-progress: false
+
+jobs:
+  read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: gitlab-read
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # no third-party action in a job that holds the GitLab token
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Mirror GitLab into the tickets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            python3 -I tools/upstream/upstream.py read --dry-run
+          else
+            python3 -I tools/upstream/upstream.py read
+          fi

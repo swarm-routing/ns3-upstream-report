@@ -1,0 +1,32 @@
+# The register of upstream reports: one [[item]] per ns-3 bug the org reports
+# to nsnam/ns-3-dev, keyed by its NS3-NNN id in swarm-routing/ns3-tools
+# docs/ns3-bugs.md. tools/upstream/upstream.py reads it; its docstring is the
+# format. An item enters only by a reviewed pull request to main, and the
+# publish and reply workflows act only on the mirror tickets of items listed
+# here, so this file is also the allowlist of what can be sent upstream.
+gitlab_project = "nsnam/ns-3-dev"
+# GitLab accounts whose notes are ours (the last note not by one of them, asking something, is an "unanswered question")
+our_accounts = ["danieljoppi"]
+
+[[item]]
+id = "NS3-001"
+title = "AODV livelocks in a zero-time ICMP \"net unreachable\" storm"
+state = "draft"
+rcapa = "swarm-routing/ns3-tools#238"
+draft = ["swarm-routing/ns3-containers#55"]
+
+[[item]]
+id = "NS3-002"
+title = "AODV and DSDV order per-interface sockets by heap address"
+state = "draft"
+rcapa = "swarm-routing/ns3-tools#239"
+draft = ["swarm-routing/ns3-tools#206"]
+
+[[item]]
+id = "NS3-003"
+title = "DSDV sends on a route with a null output device (assert, or a silent SIGSEGV when optimized)"
+state = "published"
+rcapa = "swarm-routing/ns3-tools#240"
+issue = 1364
+merge_requests = [2985]
+competing = [3011]

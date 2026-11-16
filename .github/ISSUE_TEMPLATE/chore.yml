@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: MIT OR GPL-2.0-only
+name: Chore / verification
+description: Mechanical maintenance (formatting, CI, packaging) or a benchmark verification task.
+title: "[chore] "
+labels: ["chore"]
+body:
+  - type: dropdown
+    id: model
+    attributes:
+      label: Suggested model
+      description: >
+        A suggestion, not a requirement: the Claude model (one a Claude Pro plan
+        includes) suited to this work (see the labelling convention in CONTRIBUTING.md). Apply the matching `model:*` label too. Use
+        `verification` instead of `chore` for benchmark re-run tasks.
+      options:
+        - "model:haiku-5.5 — mechanical / chore"
+        - "model:sonnet-5.5 — well-specified plumbing, tooling, docs"
+        - "model:opus-5.5 — protocol semantics, root-cause work, adapter changes, architecture"
+    validations:
+      required: false
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+    validations:
+      required: true
+  - type: textarea
+    id: refs
+    attributes:
+      label: Related issues / PRs
