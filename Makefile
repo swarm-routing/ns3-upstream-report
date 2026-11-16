@@ -27,11 +27,11 @@ build: ## nothing to build: a stdlib Python tool; validates the register
 test: ## the fast tests CI runs on every PR (fixtures, fake GitHub and GitLab: no token, no network)
 	python3 -I tools/upstream/upstream.py --self-test
 
-lint: ## static checks, no changes (the org ruff configuration, as CI)
-	ruff check tools && ruff format --check tools
+lint: org-tools ## static checks, no changes (the org ruff configuration, as CI)
+	ruff check --config "$(ORG_DIR)/ruff.toml" tools && ruff format --check --config "$(ORG_DIR)/ruff.toml" tools
 
-format: ## apply the formatters
-	ruff format tools
+format: org-tools ## apply the formatters
+	ruff format --config "$(ORG_DIR)/ruff.toml" tools
 
 clean: ## remove build outputs
 	rm -rf build dist .coverage tools/upstream/__pycache__

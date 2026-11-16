@@ -322,6 +322,22 @@ class GitLab:
         ]
         return sorted(out, key=lambda n: (n["created_at"], n["id"]))
 
+    def already_sent(self, cand):
+        """GitLab's own evidence that a post went out (the link-back may have failed):
+        (iid, url) of an issue with the same title, or the id of a note in the thread
+        with the same text; None otherwise."""
+        if cand["target"] == 0:
+            q = urllib.parse.quote(cand["title"])
+            for i in self._get(f"{self.api}/issues?search={q}&in=title&per_page=100") or []:
+                if i.get("title") == cand["title"]:
+                    return i["iid"], i["web_url"]
+            return None
+        url = web_url(self.project, cand["kind"], cand["target"])
+        for n in self.notes(cand["kind"], cand["target"], url):
+            if n["body"].strip() == cand["text"].strip():
+                return n["id"]
+        return None
+
     def create_issue(self, title, description):
         got = self._post(f"{self.api}/issues", {"title": title, "description": description})
         return got["iid"], got["web_url"]
@@ -648,7 +664,7 @@ def read_item(gl, gh, cfg, it, issues, now, out):
     n = ticket["number"]
     done, extra, last_flags = mirrored_ids(cfg, comments)
     states, notes = {}, {}
-    if it["state"] != "draft":
+    if it["state"] != "draft" or extra:  # a draft the bridge published is tracked at once
         for kind, iid, mirrored in refs(it, extra):
             st = gl.item(kind, iid)
             states[(kind, iid, mirrored)] = st
@@ -669,6 +685,8 @@ def read_item(gl, gh, cfg, it, issues, now, out):
     if added:
         out.append(f"{it['id']}: mirrored {added} note(s) on #{n}")
     flags = flags_for(cfg, it, states, notes, now) if states else []
+    if n:  # the latest body, so an edit made during this run is kept
+        ticket = gh.issue(n) or ticket
     body = ticket.get("body") or ""
     new = replace_status(body, status_block(cfg, it, states, flags))
     if new != body:
@@ -1012,8 +1030,9 @@ def cmd_send(cfg, gh, gl, root, now):
             lines.append(f"{c['key']}: waits ({why})")
             continue
         gl.allowed = {(k, i) for k, i, mine in refs(it) if mine}
+        done = gl.already_sent(c)  # a write GitLab took whose link-back was lost
         if c["target"] == 0:
-            iid, url = gl.create_issue(c["title"], c["text"])
+            iid, url = done or gl.create_issue(c["title"], c["text"])
             marker = f"{c['key']} -> {proj}#{iid}"
             msg = (
                 f"Published as [{proj}#{iid}]({url}). "
@@ -1021,7 +1040,7 @@ def cmd_send(cfg, gh, gl, root, now):
             )
             history.append((c["key"], ("#", iid), now))
         else:
-            nid = gl.create_note(c["kind"], c["target"], c["text"])
+            nid = done or gl.create_note(c["kind"], c["target"], c["text"])
             url = f"{web_url(proj, c['kind'], c['target'])}#note_{nid}"
             marker = f"{c['key']} -> {proj}{c['kind']}{c['target']} note {nid}"
             msg = f"Sent as [a note on {proj}{c['kind']}{c['target']}]({url})."
@@ -1173,7 +1192,7 @@ draft = ["swarm-routing/ns3-containers#55"]
         ),
         f"{GITLAB}/nsnam/ns-3-dev/-/merge_requests/3011/discussions.json": [],
     }
-    gl_calls = []
+    gl_calls, gl_created = [], []
 
     def gl_transport(method, url, headers, body=None):
         gl_calls.append((method, url, "PRIVATE-TOKEN" in headers, body))
@@ -1181,8 +1200,36 @@ draft = ["swarm-routing/ns3-containers#55"]
             if "PRIVATE-TOKEN" not in headers:
                 raise HttpError(method, url, 401, "401 Unauthorized")
             if url.endswith("/issues"):
-                return 201, {"iid": 1400, "web_url": f"{GITLAB}/nsnam/ns-3-dev/-/issues/1400"}
-            return 201, {"id": 9000000 + len(gl_calls)}
+                iid = 1400 + len(gl_created)
+                got = {
+                    "iid": iid,
+                    "title": body["title"],
+                    "web_url": f"{GITLAB}/nsnam/ns-3-dev/-/issues/{iid}",
+                }
+                gl_created.append(got)
+                gl_data[f"{api}/issues/{iid}"] = dict(
+                    got, state="opened", labels=[], updated_at="2026-11-18T13:00:00.000Z"
+                )
+                gl_data[f"{GITLAB}/nsnam/ns-3-dev/-/issues/{iid}/discussions.json"] = []
+                return 201, got
+            nid = str(9000000 + len(gl_calls))
+            disc = url.replace(api, f"{GITLAB}/nsnam/ns-3-dev/-").split("/notes")[0]
+            gl_data.setdefault(disc + "/discussions.json", []).append(
+                {
+                    "notes": [
+                        {
+                            "id": nid,
+                            "system": False,
+                            "note": body["body"],
+                            "created_at": "2026-11-18T13:00:00.000Z",
+                            "author": {"username": "danieljoppi", "name": "Daniel"},
+                        }
+                    ]
+                }
+            )
+            return 201, {"id": int(nid)}
+        if "/issues?search=" in url:
+            return 200, [dict(i) for i in gl_created]
         if url.endswith("/notes?sort=asc&order_by=created_at&per_page=100&page=1"):
             if "PRIVATE-TOKEN" not in headers:
                 raise HttpError(method, url, 401, "401 Unauthorized")
@@ -1630,6 +1677,32 @@ draft = ["swarm-routing/ns3-containers#55"]
                 "GITLAB_TOKEN",
             ),
         )
+        # a link-back that fails after GitLab took the post: the next run finds GitLab's
+        # own evidence (the issue's title, the note's text) and does not post again
+        write("replies/NS3-003/3691851680.md", "Logging the drop, as agreed.\n")
+        fk.clock = iso(later + timedelta(hours=26))
+        cmd_plan(cfg, g, root, later + timedelta(hours=26))
+        real = fk.add
+        fk.add = lambda *a, **k: (_ for _ in ()).throw(HttpError("POST", "x", 502, "bad gateway"))
+        gl_calls.clear()
+        try:
+            cmd_send(cfg, g, gw, root, later + timedelta(hours=51))
+        except HttpError:
+            pass
+        fk.add = real
+
+        def ours():
+            return [c for c in posts() if "Logging the drop" in json.dumps(c[3])]
+
+        first = len(ours())
+        out = cmd_send(cfg, g, gw, root, later + timedelta(hours=51))
+        check(
+            "a lost link-back is recovered from GitLab, not posted again",
+            first == 1
+            and len(ours()) == 1
+            and any(x.startswith("reply NS3-003/3691851680: sent:") for x in out),
+        )
+        remove("replies/NS3-003/3691851680.md")
         # gate "auto": scheduled and sent in the same run; one new issue per day
         auto = dict(cfg, gate="auto")
         auto["item"] = [dict(i) for i in cfg["item"]] + [

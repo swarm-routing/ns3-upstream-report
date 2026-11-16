@@ -9,7 +9,9 @@ workflows (read, send). A contributor (usually an agent) adds an item to
 
 Python 3.11 or newer (the tool reads TOML with `tomllib`; CI runs 3.13 for
 the tests and the runner's Python 3.12 in the workflows), `make`, and `ruff`
-0.17.1 for lint. Docker is not needed.
+0.17.1 for lint, and [actionlint](https://github.com/rhysd/actionlint) 1.7.12
+for the workflows (`go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`,
+or its release binary, as `ci.yml` downloads it). Docker is not needed.
 
 ## Get the code
 
@@ -70,8 +72,8 @@ None: the tool needs only Python, and the repository builds no image.
 ## Lint and format
 
 ```bash
-make lint      # ruff check tools && ruff format --check tools
-make format    # ruff format tools
+make lint      # ruff check and ruff format --check on tools/, with the org ruff.toml
+make format    # ruff format on tools/, with the org ruff.toml
 make headers   # licence headers: tools/ MIT OR GPL-2.0-only, the rest GPL-2.0-only
 actionlint .github/workflows/*.yml
 ```
@@ -90,7 +92,9 @@ actionlint .github/workflows/*.yml
 | `sync-labels.yml` | the org's labels | no |
 | `read.yml`, `send.yml` | the bridge itself (schedule, merges) | no |
 
-The required checks are the ones the `main` ruleset lists (`gh api
+The "yes" rows are required once swarm-routing/.github's `repo-settings`
+applies this repository's `[settings]` (dispatched right after the first
+merge); until then nothing gates a merge. The required checks are the ones the `main` ruleset lists (`gh api
 repos/swarm-routing/ns3-upstream-report/rules/branches/main`). `main` merges
 through a merge queue: enable auto-merge on a PR.
 

@@ -9,6 +9,7 @@ Licensed per directory, as AntHocNet
 |------|---------|
 | `tools/` | `MIT OR GPL-2.0-only` |
 | `tools/upstream/fixtures/` | not ours: responses of gitlab.com's public API and pages for nsnam/ns-3-dev #1364, !2985 and !3011, recorded 2026-11-16, kept unchanged as test input only; the notes in them belong to their authors |
+| `.github/ISSUE_TEMPLATE/` forms copied from swarm-routing/.github (`forms = true`) | `MIT OR GPL-2.0-only`, as their source: org-sync keeps them byte-identical to the org's forms |
 | everything else (workflows, the register, docs) | `GPL-2.0-only` |
 
 `MIT OR GPL-2.0-only` means you may use that code under either licence, at
