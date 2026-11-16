@@ -7,10 +7,8 @@ Licensed per directory, as AntHocNet
 
 | Path | Licence |
 |------|---------|
-| `tools/` | `MIT OR GPL-2.0-only` |
 | `cmd/`, `internal/` (the Go tool), `go.mod`, `go.sum` | `MIT OR GPL-2.0-only` |
-| `internal/fake/testdata/` | not ours: the same recorded gitlab.com responses as `tools/upstream/fixtures/`, kept unchanged as test input only |
-| `tools/upstream/fixtures/` | not ours: responses of gitlab.com's public API and pages for nsnam/ns-3-dev #1364, !2985 and !3011, recorded 2026-11-16, kept unchanged as test input only; the notes in them belong to their authors |
+| `internal/fake/testdata/` | not ours: responses of gitlab.com's public API and pages for nsnam/ns-3-dev #1364, !2985 and !3011, recorded 2026-11-16, kept unchanged as test input only; the notes in them belong to their authors |
 | `patches/` | each series is a merge request's to nsnam/ns-3-dev, under ns-3's `GPL-2.0-only`, kept for resolution only |
 | `.github/ISSUE_TEMPLATE/` forms copied from swarm-routing/.github (`forms = true`) | `MIT OR GPL-2.0-only`, as their source: org-sync keeps them byte-identical to the org's forms |
 | everything else (workflows, the register, docs) | `GPL-2.0-only` |

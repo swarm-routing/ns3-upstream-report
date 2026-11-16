@@ -6,10 +6,8 @@ name: CI
 # (reusable-go-ci.yml: build, gofmt, vet, staticcheck, govulncheck, go test -race
 # against the fixtures, a fake GitHub and a fake GitLab: no token, no network), its
 # coverage goes to Codecov (report-only); the workflows pass actionlint, tracked.toml
-# validates, reports/ and replies/ pass the outbound guards, and the Python tool
-# (tools/upstream/, until it is removed) passes ruff and its self-test, and the port's
-# byte-identical proof against it. Licence headers and the org-sync drift check run in
-# their own workflows (licence.yml, org-sync.yml).
+# validates and reports/ and replies/ pass the outbound guards. Licence headers and
+# the org-sync drift check run in their own workflows (licence.yml, org-sync.yml).
 on:
   push:
     branches: [main]
@@ -39,11 +37,6 @@ jobs:
         run: |
           upstream validate
           upstream lint
-      - name: The Go port's output is the Python tool's (tools/upstream/proof)
-        timeout-minutes: 5
-        env:
-          GOTOOLCHAIN: local
-        run: tools/upstream/proof/proof.sh
       - name: actionlint
         timeout-minutes: 5  # one download (org CONTRIBUTING invariant 5)
         env:
@@ -70,10 +63,3 @@ jobs:
     with:
       artifact: go-coverage
       flags: go
-
-  python:
-    uses: swarm-routing/.github/.github/workflows/reusable-python-ci.yml@main
-    with:
-      paths: tools
-      tests: tools/upstream/test_upstream.py
-      source: tools

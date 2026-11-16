@@ -7,7 +7,7 @@ before changing anything. Org-wide conventions:
 
 ## What this repo is
 
-**Status (2026-11-16): design decided (ADR-0002, #2); every pipeline P0–P7 is one Go tool, `cmd/upstream` (ADR-0003); the Python tool stays only until the Go one has a green run, then goes.**
+**Status (2026-11-16): design decided (ADR-0002, #2); every pipeline P0–P7 is one Go tool, `cmd/upstream` (ADR-0003).**
 
 The org's bridge to ns-3's GitLab (https://gitlab.com/nsnam/ns-3-dev), with
 no manual step: one **mirror ticket** per upstream report (an `NS3-NNN` bug of
@@ -25,8 +25,6 @@ internal/                    its packages: register (tracked.toml), bridge (mark
                              (the Python semantics the output keeps), httpx, fake (the tests' GitLab and GitHub) — MIT OR GPL-2.0-only
 internal/fake/testdata/      gitlab.com's public responses for nsnam/ns-3-dev issue 1364, MRs 2985 and 3011, recorded 2026-11-16
 .github/actions/upstream/    builds cmd/upstream in a job (setup-go, the go.mod toolchain, CGO_ENABLED=0 -trimpath)
-tools/upstream/              the Python tool the Go one replaced (upstream.py, its self-test and fixtures) and the port's
-                             byte-identical proof (proof/): removed once the Go tool has run green — MIT OR GPL-2.0-only
 patches/                     P5: NS3-NNN/<mr>/<head>.patch, a conflicting merge request's series, by the bot's pull request
 tracked.toml                 the register and allowlist (one [[item]] per NS3-NNN), the gate policy
 reports/                     P0: NS3-NNN.md, a report, first line `# <GitLab title>` (merged by PR only; README.md there)
@@ -52,7 +50,6 @@ go build -o upstream ./cmd/upstream             # GOTOOLCHAIN=go1.27.4 if your G
 ./upstream validate                             # tracked.toml
 ./upstream lint                                 # reports/, replies/: the outbound guards, as CI
 env -u GITHUB_TOKEN -u GITLAB_TOKEN ./upstream read --dry-run   # live GitLab, public pages; prints the GitHub writes it would make
-tools/upstream/proof/proof.sh                   # the Go tool's output = the Python tool's (until tools/upstream/ is removed)
 ```
 
 Never run `read`, `plan`, `send`, `maintain` or `rotate` without

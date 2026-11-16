@@ -5,9 +5,8 @@ This repository is the org's bridge to ns-3's GitLab: one Go tool,
 and its workflows (read, send, verify, lifecycle, maintain, rotate). A
 contributor (usually an agent) adds an item to `tracked.toml`, drafts a
 report or a reply as a file, or changes a pipeline. The tool was a stdlib
-Python script, `tools/upstream/upstream.py`, until the port of
-[ADR-0003](adr/0003-the-bridge-is-go.md); it stays, with the port's
-byte-identical proof, until the Go tool has run green, then goes.
+Python script until the port of [ADR-0003](adr/0003-the-bridge-is-go.md),
+proven byte-identical to it.
 
 ## Prerequisites
 
@@ -15,8 +14,7 @@ Go at the version `go.mod`'s `toolchain` line names (go1.27.4; with an older
 Go, `GOTOOLCHAIN=go1.27.4` downloads it), `make`, and
 [actionlint](https://github.com/rhysd/actionlint) 1.7.12 for the workflows
 (`go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`, or its
-release binary, as `ci.yml` downloads it). Python 3.11+ only for the old tool
-and the proof, while they exist. Docker is not needed.
+release binary, as `ci.yml` downloads it). Docker is not needed.
 
 ## Get the code
 
@@ -70,18 +68,6 @@ and verify are built without the GitLab write client and send GET only
 writes to GitLab or GitHub for real. CI runs them through
 `reusable-go-ci.yml` (job `go`), with coverage to Codecov.
 
-The port's proof, while `tools/upstream/` exists:
-
-```bash
-tools/upstream/proof/proof.sh                       # the self-test's fixtures
-python3 -I tools/upstream/proof/py_replay.py record   # a live world (GH_TOKEN for GitHub), as $TMPDIR/upstream-proof/world.json
-cp "${TMPDIR:-/tmp}/upstream-proof/world.json" /tmp/live.json && tools/upstream/proof/proof.sh /tmp/live.json
-```
-
-Both tools run the commands of `tools/upstream/proof/commands.json` against
-the same recorded world (every GET served from it, every write recorded and
-never sent); `compare.py` diffs each exit status, stdout and write.
-
 ## Run
 
 A read against live GitLab, writing nothing to GitHub:
@@ -106,7 +92,7 @@ None: the tool is one static binary, and the repository builds no image.
 ```bash
 make lint      # gofmt -l and go vet (CI adds staticcheck and govulncheck)
 make format    # gofmt -w
-make headers   # licence headers: tools/, cmd/, internal/ MIT OR GPL-2.0-only, the rest GPL-2.0-only
+make headers   # licence headers: cmd/, internal/ MIT OR GPL-2.0-only, the rest GPL-2.0-only
 actionlint .github/workflows/*.yml
 ```
 
@@ -114,7 +100,7 @@ actionlint .github/workflows/*.yml
 
 | Workflow | What it checks | Required |
 | --- | --- | --- |
-| `ci.yml` | `go`: build, gofmt, vet, staticcheck, govulncheck, the tests with `-race` and coverage (`reusable-go-ci.yml`), `codecov`; `workflows`: `tracked.toml` validates, the outbound lint, the port's proof, actionlint; `python`: the old tool's ruff and self-test, until it is removed | yes (`go / go`, `workflows`) |
+| `ci.yml` | `go`: build, gofmt, vet, staticcheck, govulncheck, the tests with `-race` and coverage (`reusable-go-ci.yml`), `codecov`; `workflows`: `tracked.toml` validates, the outbound lint, actionlint | yes (`go / go`, `workflows`) |
 | `licence.yml` | licence headers | yes (`headers / licence`) |
 | `org-sync.yml` | org-managed files match the org templates | yes (`check / org-sync`) |
 | `pr-title.yml` | the PR title is a lowercase Conventional Commit | yes (`title / title`) |

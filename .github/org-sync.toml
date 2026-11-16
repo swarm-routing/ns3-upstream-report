@@ -1,11 +1,10 @@
 # org-sync configuration (swarm-routing/.github tools/org-sync).
 kind = "python"
 # the tool is Go (swarm-routing/.github docs/adr/0002-pipelines-are-go.md); org-sync has no Go kind,
-# so the Python badge is left out and the Go badge is this repository's own
+# so the kind stays "python" (its templates fit a tooling repository), the Python badge is left out and the Go badge is this repository's own
 badges = ["ci", "release", "doi", "cite", "vcpkg", "pypi", "licence", "conventional", "arena", "scorecard", "bestpractices", "rcapa", "ns3-bugs"]
 title = "ns3-upstream-report"
-dual = ["tools/", "cmd/", "internal/"]
-python = "3.11"
+dual = ["cmd/", "internal/"]
 # the org's issue forms, copied: this repository has its own form (upstream-report.yml)
 forms = true
 posture = "the org's bridge to ns-3's GitLab: one Go tool (cmd/upstream) and its workflows, no simulation code"

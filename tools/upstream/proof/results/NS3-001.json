@@ -1,1 +1,0 @@
-{"item": "NS3-001", "master": "8ec9b4a190b52dadb5a3c35572dec687e1b75379", "result": "reproduces", "detail": "`timeout 120 ./ns3 run --no-build 'manet-canary --protocol=aodv --range=100'` exited 124 é"}
