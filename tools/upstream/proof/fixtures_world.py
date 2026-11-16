@@ -1,28 +1,18 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
 # SPDX-License-Identifier: MIT OR GPL-2.0-only
-"""fixtures_world.py OUT.json: the proof's world from tools/upstream/fixtures (the
+"""fixtures_world.py: world.json in the proof's directory, the world from tools/upstream/fixtures (the
 self-test's recorded GitLab pages of nsnam/ns-3-dev, 2026-11-16) and an empty GitHub."""
 
 import json
 import os
-import sys
 import tempfile
 
 FX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures")
+# every file of the proof lives here, under fixed names: no path comes from an argument
+WORK = os.path.join(tempfile.gettempdir(), "upstream-proof")
 GL = "https://gitlab.com"
 API = f"{GL}/api/v4/projects/nsnam%2Fns-3-dev"
-
-
-def inside(path):
-    """`path` resolved, refused unless it lies in the working directory or the temporary
-    directory (the proof reads and writes nowhere else)."""
-    full = os.path.realpath(path)
-    for base in (os.getcwd(), tempfile.gettempdir()):
-        root = os.path.realpath(base)
-        if os.path.commonpath([root, full]) == root:
-            return full
-    raise SystemExit(f"refused: {path} is outside the working and the temporary directory")
 
 
 def load(name):
@@ -57,5 +47,6 @@ world = {
         {},
     ],
 }
-with open(inside(sys.argv[1]), "w", encoding="utf-8") as f:
+os.makedirs(WORK, exist_ok=True)
+with open(os.path.join(WORK, "world.json"), "w", encoding="utf-8") as f:
     json.dump(world, f, indent=1, ensure_ascii=False)

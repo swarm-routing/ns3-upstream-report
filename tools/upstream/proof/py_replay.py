@@ -3,14 +3,17 @@
 # SPDX-License-Identifier: MIT OR GPL-2.0-only
 """The Go port's byte-identical proof, Python side (ADR 0002 of swarm-routing/.github).
 
-  py_replay.py record WORLD.json            GETs live (GitHub with GH_TOKEN, GitLab tokenless) while
-                                            running the commands below; writes are never sent
-  py_replay.py replay WORLD.json OUT.json   the same commands against WORLD only
+  py_replay.py record   GETs live (GitHub with GH_TOKEN, GitLab tokenless) while running the
+                        commands below, into world.json; writes are never sent
+  py_replay.py replay   the same commands against world.json only, into py.json
+
+Both files are in the proof's directory, $TMPDIR/upstream-proof (no path comes from an
+argument).
 
 Every command runs in-process with upstream.py's own code; a GET is served from the
 world (404 when absent), a write is recorded and answered with a canned body, never sent.
-OUT holds, per command, its stdout, its exit status and its writes. cmd/upstream's
-TestProof writes the same file for the Go tool; compare.py diffs the two.
+py.json holds, per command, its stdout, its exit status and its writes. cmd/upstream's
+TestProof writes the same, as go.json, for the Go tool; compare.py diffs the two.
 """
 
 import contextlib
@@ -28,23 +31,17 @@ import upstream  # noqa: E402
 
 # the commands of the proof, run from the repository root with these arguments
 COMMANDS = json.load(open(os.path.join(HERE, "commands.json"), encoding="utf-8"))
+# every file of the proof lives here, under fixed names: no path comes from an argument
+WORK = os.path.join(tempfile.gettempdir(), "upstream-proof")
 CANNED = {"number": 0, "id": 0, "iid": 0, "html_url": "(replay)", "web_url": "(replay)"}
 
 
-def inside(path):
-    """`path` resolved, refused unless it lies in the working directory or the temporary
-    directory (the proof reads and writes nowhere else)."""
-    full = os.path.realpath(path)
-    for base in (os.getcwd(), tempfile.gettempdir()):
-        root = os.path.realpath(base)
-        if os.path.commonpath([root, full]) == root:
-            return full
-    raise SystemExit(f"refused: {path} is outside the working and the temporary directory")
-
-
 def main():
-    mode, world_path = sys.argv[1], sys.argv[2]
-    world_path = inside(world_path)
+    mode = sys.argv[1]
+    if mode not in ("record", "replay"):
+        raise SystemExit("py_replay.py record|replay")
+    os.makedirs(WORK, exist_ok=True)
+    world_path = os.path.join(WORK, "world.json")
     world = {} if mode == "record" else json.load(open(world_path, encoding="utf-8"))
     writes = []
 
@@ -99,7 +96,7 @@ def main():
         with open(world_path, "w", encoding="utf-8") as f:
             json.dump(world, f, indent=1, sort_keys=True, ensure_ascii=False)
     else:
-        with open(inside(sys.argv[3]), "w", encoding="utf-8") as f:
+        with open(os.path.join(WORK, "py.json"), "w", encoding="utf-8") as f:
             json.dump(results, f, indent=1, ensure_ascii=False)
 
 
