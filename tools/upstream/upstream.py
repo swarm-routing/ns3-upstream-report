@@ -13,6 +13,7 @@ Usage:
   upstream.py verify   [--tracked FILE] ITEM --ns3 DIR --out FILE
   upstream.py verify-record [--tracked FILE] --results DIR --run-url URL [--dry-run]
   upstream.py lifecycle [--tracked FILE] [--dry-run] [--now ISO-8601]
+  upstream.py rotate   --env gitlab-read|gitlab-write [--tracked FILE] [--now ISO-8601]
   upstream.py --self-test
 
 `tracked.toml` is the register: one `[[item]]` per upstream report, keyed by
@@ -64,6 +65,17 @@ verify    P1: an item's `reproduce` table (`modules`, `files` pinned to a
           `output TEXT`) run in an ns-3-dev `master` tree; `verify-record`
           comments the result with an `upstream-verified` marker, the evidence
           plan reads besides `verified` in tracked.toml.
+P5        plan and send also maintain our merge requests (author in
+          `our_accounts`): `need_rebase` -> GitLab's rebase API; a conflict ->
+          a "not scheduled" note asking for the resolved series as
+          `patches/NS3-NNN/<mr>/NNNN-*.patch` by PR (each commit with
+          `Assisted-by: Claude`), which send applies on the target branch and
+          pushes to the fork's source branch only, with --force-with-lease; no
+          reviewer 7 days after our last note -> REVIEW_REQUEST, once per 30
+          days. Each goes through the veto window like a post.
+rotate    P7: the environment's token rotated at 60 days and stored as its
+          secret with the org App's token (APP_TOKEN), checked first; skipped
+          with a clear line until the App has secrets: write.
 lifecycle P6: a merged MR of ours whose commit an `ns-3.X` tag contains: "fixed
           in ns-3.X" on the ticket, one issue per `workarounds` entry (with the
           org bot's token, BOT_TOKEN), and the RCAPA ticket closed once all of
@@ -83,6 +95,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import tomllib
@@ -362,6 +375,35 @@ class GitLab:
             if n["body"].strip() == cand["text"].strip():
                 return n["id"]
         return None
+
+    def rebase(self, iid):
+        """P5: GitLab's rebase of one of our merge requests (scope: an allowed thread)."""
+        if self.project != ALLOWED_PROJECT or ("!", iid) not in self.allowed:
+            raise SystemExit(f"scope: rebase of !{iid} is not a write the bridge may make")
+        if self.dry:
+            return {}
+        if not self.token:
+            raise SystemExit(
+                "GITLAB_TOKEN is not set: writing to GitLab needs the gitlab-write token"
+            )
+        headers = {"Accept": "application/json", "User-Agent": "ns3-upstream-report"}
+        headers["PRIVATE-TOKEN"] = self.token
+        return self.transport("PUT", f"{self.api}/merge_requests/{iid}/rebase", headers, {})[1]
+
+    def project_path(self, pid):
+        return self._get(f"{self.base}/api/v4/projects/{int(pid)}")["path_with_namespace"]
+
+    def token_self(self):
+        return self._get(f"{self.base}/api/v4/personal_access_tokens/self")
+
+    def rotate_self(self, expires_at):
+        """P7: rotate this token (GitLab revokes the old one); returns the new token."""
+        if not self.token:
+            raise SystemExit("GITLAB_TOKEN is not set")
+        headers = {"Accept": "application/json", "User-Agent": "ns3-upstream-report"}
+        headers["PRIVATE-TOKEN"] = self.token
+        url = f"{self.base}/api/v4/personal_access_tokens/self/rotate"
+        return self.transport("POST", url, headers, {"expires_at": expires_at})[1]
 
     def commit_tags(self, sha):
         """The tags that contain a commit (public, no token needed)."""
@@ -822,6 +864,21 @@ def lint_files(cfg, root):
     proj = cfg["gitlab_project"]
     ids = {it["id"] for it in cfg.get("item", [])}
     problems = []
+    for dirpath, _, files in os.walk(os.path.join(root, "patches")):
+        for name in sorted(files):
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            if rel == os.path.join("patches", "README.md"):
+                continue
+            m = re.fullmatch(r"patches/(NS3-\d{3})/(\d+)/\d{4}-[A-Za-z0-9._-]+\.patch", rel)
+            item = next((i for i in cfg.get("item", []) if m and i["id"] == m.group(1)), None)
+            if not item or int(m.group(2)) not in item.get("merge_requests", []):
+                problems.append(
+                    f"{rel}: not patches/<an id>/<one of its merge requests>/NNNN-*.patch"
+                )
+                continue
+            problems += [
+                f"{rel}: {p}" for p in lint_patch(read_file(os.path.join(root, rel)) or "")
+            ]
     for sub in ("reports", "replies"):
         base = os.path.join(root, sub)
         for dirpath, _, files in os.walk(base):
@@ -956,6 +1013,8 @@ def scheduled(cfg, comments):
 def rate_limited(cand, history, now):
     """Why a post must wait for the rate limits, or None. history: [(key, target, when)]."""
     day = now - timedelta(hours=24)
+    if cand.get("action", "note") != "note":
+        return None  # a rebase or a push is not a post; its key makes it once per head
     if cand["key"].startswith("publish "):
         if any(k.startswith("publish ") and t >= day for k, _, t in history):
             return "one new issue per day"
@@ -972,12 +1031,128 @@ def history_of(cfg, tickets):
         for v, when in sent_markers(cfg, comments):
             key, _, rest = v.partition(" -> ")
             m = re.match(r"\S+?([#!])(\d+)", rest)
+            if re.search(r" (rebase|push \S+)$", rest):
+                continue  # not a post in the thread
             if m and when:
                 out.append((key, (m.group(1), int(m.group(2))), parse_time(when)))
     return out
 
 
-def plan(cfg, gh, root, now):
+REVIEW_REQUEST = (
+    "Friendly ping: this merge request has no reviewer yet. Our last answer above is a week "
+    "old; could someone from the maintainers of this module take a look when there is time?"
+)
+ASSISTED = "Assisted-by: Claude"
+
+
+def patch_series(root, it, mr):
+    """[(name, text)] of patches/NS3-NNN/<mr>/*.patch, the resolved series of a conflict."""
+    d = os.path.join(root, "patches", it["id"], str(mr))
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in sorted(os.listdir(d)):
+        if re.fullmatch(r"\d{4}-[A-Za-z0-9._-]+\.patch", name):
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                out.append((name, f.read()))
+    return out
+
+
+def lint_patch(text):
+    """What is wrong with one git format-patch file: its commit message needs the trailer."""
+    head = text.split("\n---\n", 1)[0]
+    if not text.startswith("From ") or "\nSubject: " not in text:
+        return ["not a `git format-patch` file"]
+    return [] if ASSISTED in head else [f"its commit message lacks `{ASSISTED}` (D2)"]
+
+
+def maintenance(cfg, gl, root, it, comments, now):
+    """P5 candidates for one item: a rebase, a resolved series to push, a review request."""
+    ours = set(cfg.get("our_accounts", []))
+    out = []
+    sent = sent_markers(cfg, comments)
+    for mr in it.get("merge_requests", []):
+        st = gl.item("!", mr)
+        if st.get("state") != "opened" or (st.get("author") or {}).get("username") not in ours:
+            continue
+        sha = (st.get("sha") or "")[:12]
+        base = {"kind": "!", "target": mr, "title": "", "problems": []}
+        series = patch_series(root, it, mr)
+        if series:
+            text = "".join(t for _, t in series)
+            key = f"push {it['id']}/!{mr}/{digest(text)[:12]}"
+            if not any(v.startswith(key + " ") for v, _ in sent):
+                problems = [f"{n}: {p}" for n, t in series for p in lint_patch(t)]
+                out.append(
+                    dict(
+                        base,
+                        key=key,
+                        action="push",
+                        text="Push to the source branch of !%d:\n\n" % mr
+                        + "\n".join(f"- `{n}`" for n, _ in series),
+                        series=series,
+                        mr=st,
+                        sha=digest("push", it["id"], mr, text),
+                        problems=problems,
+                    )
+                )
+                continue
+        if st.get("has_conflicts"):
+            out.append(
+                dict(
+                    base,
+                    key=f"conflict {it['id']}/!{mr}/{sha}",
+                    action="none",
+                    text="",
+                    sha=digest("conflict", mr, sha),
+                    problems=[
+                        f"!{mr} conflicts with its target: an agent puts the resolved series "
+                        f"(`git format-patch`, each commit with `{ASSISTED}`) in "
+                        f"`patches/{it['id']}/{mr}/` by pull request; the bridge pushes it"
+                    ],
+                )
+            )
+        elif st.get("detailed_merge_status") == "need_rebase":
+            key = f"rebase {it['id']}/!{mr}/{sha}"
+            out.append(
+                dict(
+                    base,
+                    key=key,
+                    action="rebase",
+                    text=f"GitLab's rebase of !{mr} on its target branch (head `{sha}`).",
+                    sha=digest("rebase", mr, sha),
+                )
+            )
+        if not st.get("reviewers"):
+            user = [n for n in gl.notes("!", mr, st.get("web_url") or "") if not n["system"]]
+            last = user[-1] if user else None
+            recent = [
+                v
+                for v, when in sent
+                if v.startswith(f"review {it['id']}/!{mr}/")
+                and when
+                and now - parse_time(when) < timedelta(days=30)
+            ]
+            if (
+                last
+                and last["author"] in ours
+                and now - parse_time(last["created_at"]) > timedelta(days=7)
+                and not recent
+            ):
+                body = outbound(REVIEW_REQUEST)
+                out.append(
+                    dict(
+                        base,
+                        key=f"review {it['id']}/!{mr}/{now.strftime('%Y-%m')}",
+                        action="note",
+                        text=body,
+                        sha=digest("review", mr, body),
+                    )
+                )
+    return out
+
+
+def plan(cfg, gh, root, now, gl=None):
     """[(item, ticket, comments, candidate, status)] for every candidate post.
     status: blocked, held, schedule, waiting, rate, ready."""
     issues = gh.issues()
@@ -993,7 +1168,11 @@ def plan(cfg, gh, root, now):
         )
         sched = scheduled(cfg, comments)
         gate, w_issue, w_note = policy(cfg, it)
-        for cand in candidates(cfg, root, it, comments, now):
+        more = maintenance(cfg, gl, root, it, comments, now) if gl is not None else []
+        done = {v.split(" -> ")[0] for v, _ in sent_markers(cfg, comments)}
+        for cand in candidates(cfg, root, it, comments, now) + more:
+            if cand["key"] in done:
+                continue
             if cand["problems"]:
                 status = "blocked"
             elif held:
@@ -1017,10 +1196,10 @@ def plan(cfg, gh, root, now):
     return rows, history
 
 
-def cmd_plan(cfg, gh, root, now):
+def cmd_plan(cfg, gh, root, now, gl=None):
     """Comment the schedule and the blocks on the tickets; returns (lines, ready?)."""
     lines, ready = [], False
-    rows, _ = plan(cfg, gh, root, now)
+    rows, _ = plan(cfg, gh, root, now, gl)
     for it, t, comments, c, status in rows:
         n = t["number"]
         if status == "blocked":
@@ -1035,9 +1214,13 @@ def cmd_plan(cfg, gh, root, now):
             lines.append(f"{c['key']}: blocked: {'; '.join(c['problems'])}")
         elif status == "schedule":
             due = c["due"].strftime("%Y-%m-%dT%H:%M:%SZ")
+            act = c.get("action", "note")
             where = (
                 "a new issue"
                 if c["target"] == 0
+                else f"a {act} of [{cfg['gitlab_project']}!{c['target']}]"
+                f"({web_url(cfg['gitlab_project'], '!', c['target'])})"
+                if act in ("rebase", "push")
                 else f"a note on [{cfg['gitlab_project']}{c['kind']}{c['target']}]"
                 f"({web_url(cfg['gitlab_project'], c['kind'], c['target'])})"
             )
@@ -1060,10 +1243,84 @@ def cmd_plan(cfg, gh, root, now):
     return lines, ready
 
 
-def cmd_send(cfg, gh, gl, root, now):
+def run_git(args, env):
+    import subprocess
+
+    p = subprocess.run(["git", *args], capture_output=True, text=True, env={**os.environ, **env})
+    if p.returncode != 0:
+        raise SystemExit(f"git {args[0]} failed ({p.returncode}): {p.stderr[-300:]}")
+    return p.stdout
+
+
+def push_series(cfg, gl, mr, series, runner=None, workdir=None):
+    """P5: apply a resolved series on the target branch and push it to the merge request's
+    source branch, only in the fork (never in ALLOWED_PROJECT), only with --force-with-lease
+    on the head GitLab reports; the token goes to git as an HTTP header in the environment,
+    never in a URL or an argument."""
+    runner = runner or run_git
+    ours = set(cfg.get("our_accounts", []))
+    if (mr.get("author") or {}).get("username") not in ours:
+        raise SystemExit(f"scope: !{mr['iid']} is not ours: no push")
+    path = gl.project_path(mr["source_project_id"])
+    if path == ALLOWED_PROJECT or path.split("/")[0] not in ours:
+        raise SystemExit(f"scope: {path} is not our fork: no push")
+    problems = [p for _, t in series for p in lint_patch(t)]
+    if problems:
+        raise SystemExit("; ".join(problems))
+    if not gl.token:
+        raise SystemExit("GITLAB_TOKEN is not set")
+    import base64 as b64
+
+    auth = b64.b64encode(f"oauth2:{gl.token}".encode()).decode()
+    env = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://gitlab.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}",
+        "GIT_AUTHOR_NAME": "swarm-routing upstream bridge",
+        "GIT_COMMITTER_NAME": "swarm-routing upstream bridge",
+    }
+    work = workdir or tempfile.mkdtemp(prefix="p5-")
+    target = mr.get("target_branch", "master")
+    runner(
+        [
+            "clone",
+            "-q",
+            "--depth",
+            "50",
+            "--branch",
+            target,
+            f"{GITLAB}/{ALLOWED_PROJECT}.git",
+            work,
+        ],
+        env,
+    )
+    files = []
+    for name, text in series:
+        f = os.path.join(work, ".p5-" + name)
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        files.append(f)
+    runner(["-C", work, "am", "--3way", *files], env)
+    head = runner(["-C", work, "rev-parse", "HEAD"], env).strip()
+    branch = mr["source_branch"]
+    runner(
+        [
+            "-C",
+            work,
+            "push",
+            f"--force-with-lease={branch}:{mr['sha']}",
+            f"{GITLAB}/{path}.git",
+            f"HEAD:refs/heads/{branch}",
+        ],
+        env,
+    )
+    return head
+
+
+def cmd_send(cfg, gh, gl, root, now, runner=None):
     """Post every ready candidate, re-checked here, and link it back."""
     lines = []
-    rows, history = plan(cfg, gh, root, now)
+    rows, history = plan(cfg, gh, root, now, gl)
     proj = cfg["gitlab_project"]
     for it, t, _, c, status in rows:
         if status == "rate":
@@ -1075,6 +1332,28 @@ def cmd_send(cfg, gh, gl, root, now):
             lines.append(f"{c['key']}: waits ({why})")
             continue
         gl.allowed = {(k, i) for k, i, mine in refs(it) if mine}
+        action = c.get("action", "note")
+        if action == "rebase":
+            gl.rebase(c["target"])
+            url = web_url(proj, "!", c["target"])
+            gh.add_comment(
+                t["number"],
+                f"<!-- upstream-sent: {c['key']} -> {proj}!{c['target']} rebase -->\n"
+                f"Asked GitLab to rebase [!{c['target']}]({url}); P1 verify re-runs on the "
+                f"new head.{FOOTER}",
+            )
+            lines.append(f"{c['key']}: rebase requested")
+            continue
+        if action == "push":
+            head = push_series(cfg, gl, c["mr"], c["series"], runner)
+            gh.add_comment(
+                t["number"],
+                f"<!-- upstream-sent: {c['key']} -> {proj}!{c['target']} push {head} -->\n"
+                f"Pushed the resolved series to the source branch of !{c['target']} "
+                f"(head `{head[:12]}`).{FOOTER}",
+            )
+            lines.append(f"{c['key']}: pushed {head[:12]}")
+            continue
         done = gl.already_sent(c)  # a write GitLab took whose link-back was lost
         if c["target"] == 0:
             iid, url = done or gl.create_issue(c["title"], c["text"])
@@ -1320,6 +1599,66 @@ def cmd_lifecycle(cfg, gl, gh, now, gh_org=None):
     return lines or ["nothing released"]
 
 
+# --- P7 credentials --------------------------------------------------------------
+
+ROTATE_AFTER = timedelta(days=60)
+
+
+def sealed_box(public_key_b64, value):
+    """The secret encrypted for GitHub (libsodium sealed box; PyNaCl, installed in P7's job)."""
+    import base64 as b64
+
+    from nacl import encoding, public
+
+    key = public.PublicKey(public_key_b64.encode(), encoding.Base64Encoder())
+    return b64.b64encode(public.SealedBox(key).encrypt(value.encode())).decode()
+
+
+def cmd_rotate(gl, app, issues_gh, repo, env, now, encrypt=sealed_box):
+    """P7: rotate the environment's GitLab token when it is 60 days old (or expires within 14),
+    store the new one as the environment's secret with the org App's token, and open an issue
+    on failure. The App's access is checked first, so a token is never rotated that could not
+    be stored. Never prints a token."""
+    if not gl.token:
+        return [f"P7 {env}: skipped: no GitLab token stored yet (one-time step)"]
+    if app is None:
+        return [f"P7 {env}: skipped: no org App token (one-time step: the App's secrets: write)"]
+    base = f"repos/{repo}/environments/{env}/secrets"
+    try:
+        key = app._call("GET", f"{base}/public-key")
+    except HttpError as e:
+        if e.status in (401, 403, 404):
+            return [
+                f"P7 {env}: skipped: the org App cannot write this repository's environment "
+                f"secrets (HTTP {e.status}; one-time step: grant it secrets: write)"
+            ]
+        raise
+    me = gl.token_self()
+    age = now - parse_time(me["created_at"])
+    expires = parse_time(f"{me['expires_at']}T00:00:00Z") if me.get("expires_at") else None
+    if age < ROTATE_AFTER and (expires is None or expires - now > timedelta(days=14)):
+        return [f"P7 {env}: token is {age.days} days old; rotates at {ROTATE_AFTER.days}"]
+    try:
+        new = gl.rotate_self((now + timedelta(days=90)).strftime("%Y-%m-%d"))
+        app._call(
+            "PUT",
+            f"{base}/GITLAB_TOKEN",
+            {"encrypted_value": encrypt(key["key"], new["token"]), "key_id": key["key_id"]},
+        )
+    except Exception as e:  # noqa: BLE001 - any failure opens the issue, the token stays secret
+        msg = re.sub(r"glpat-[A-Za-z0-9_-]+", "glpat-…", str(e))[:300]
+        issues_gh.create_issue(
+            f"[P7] GitLab token rotation failed for {env}",
+            f"The rotation of `{env}`'s GitLab token failed on {now:%Y-%m-%d}: {msg}\n\n"
+            "If GitLab rotated the token but storing it failed, the old token is revoked: "
+            "the reader and the sender of this environment fail until a new token is stored "
+            "(the one-time bootstrap step).{FOOTER}".replace("{FOOTER}", FOOTER),
+            ["bug"],
+        )
+        return [f"P7 {env}: rotation failed; issue opened"]
+    return [f"P7 {env}: rotated (token was {age.days} days old), stored as the environment secret"]
+
+
 # --- command line --------------------------------------------------------------
 
 
@@ -1355,12 +1694,15 @@ def main(argv=None):
         "verify",
         "verify-record",
         "lifecycle",
+        "rotate",
     ):
         s = sub.add_parser(name)
         s.add_argument("--tracked", default=TRACKED)
         if name in ("lint", "plan", "send"):
             s.add_argument("--root", default=ROOT)
-        if name in ("read", "plan", "send", "verify-record", "lifecycle"):
+        if name == "rotate":
+            s.add_argument("--env", required=True, choices=("gitlab-read", "gitlab-write"))
+        if name in ("read", "plan", "send", "verify-record", "lifecycle", "rotate"):
             s.add_argument("--dry-run", action="store_true")
             s.add_argument("--now")
         if name == "verify":
@@ -1401,7 +1743,7 @@ def main(argv=None):
     if a.cmd == "read":
         lines = cmd_read(cfg, gl, gh, now)
     elif a.cmd == "plan":
-        lines, ready = cmd_plan(cfg, gh, a.root, now)
+        lines, ready = cmd_plan(cfg, gh, a.root, now, gl)
         write_output({"ready": "true" if ready else "false"}, "\n".join(lines) + "\n")
         lines = []
     elif a.cmd == "verify-record":
@@ -1413,6 +1755,10 @@ def main(argv=None):
             with open(contained(base, name), encoding="utf-8") as f:
                 results.append(json.load(f))
         lines = cmd_verify_record(cfg, gh, results, a.run_url, now)
+    elif a.cmd == "rotate":
+        tok = os.environ.get("APP_TOKEN") or None
+        app = GitHub(gh.repo, tok) if tok else None
+        lines = cmd_rotate(gl, app, gh, gh.repo, a.env, now)
     elif a.cmd == "lifecycle":
         org = os.environ.get("BOT_TOKEN") or None
         gh_org = GitHub(gh.repo, org, dry_run=a.dry_run) if org else None
@@ -1505,6 +1851,10 @@ draft = ["swarm-routing/ns3-containers#55"]
 
     def gl_transport(method, url, headers, body=None):
         gl_calls.append((method, url, "PRIVATE-TOKEN" in headers, body))
+        if method == "PUT" and url.endswith("/rebase"):
+            return 202, {"rebase_in_progress": True}
+        if url.endswith("/personal_access_tokens/self/rotate"):
+            return 200, {"token": "glpat-NEWSECRET", "expires_at": body["expires_at"]}
         if method == "POST":
             if "PRIVATE-TOKEN" not in headers:
                 raise HttpError(method, url, 401, "401 Unauthorized")
@@ -2224,6 +2574,212 @@ draft = ["swarm-routing/ns3-containers#55"]
     )
     gl_data[f"{api}/merge_requests/2985"] = load("mr-2985.json")
 
+    # P5 MR maintenance: rebase, conflict, the resolved series pushed, a review request
+    mr0 = load("mr-2985.json")
+    gl_data[f"{GITLAB}/api/v4/projects/{mr0['source_project_id']}"] = {
+        "path_with_namespace": "danieljoppi/ns-3-dev"
+    }
+    with tempfile.TemporaryDirectory() as root:
+        f5 = FakeGitHub()
+        g5 = GitHub("o/r", "t", f5.transport)
+        cmd_read(cfg, gl, g5, now)
+        t5 = next(n for n, i in f5.issues.items() if "NS3-003" in i["title"])
+        gw5 = GitLab("nsnam/ns-3-dev", "tok", gl_transport)
+        lines, _ = cmd_plan(cfg, g5, root, now, gl)
+        check(
+            "P5: need_rebase on our MR is scheduled as a rebase, 24 h out",
+            "rebase NS3-003/!2985/83a80c744c10: scheduled for 2026-11-17T12:00:00Z" in lines,
+        )
+        gl_calls.clear()
+        f5.clock = "2026-11-17T13:00:00Z"
+        out = cmd_send(cfg, g5, gw5, root, now + timedelta(hours=25))
+        check(
+            "P5: after the window GitLab's rebase API is called, once",
+            [c[0] for c in gl_calls if c[0] != "GET"] == ["PUT"]
+            and "rebase NS3-003/!2985/83a80c744c10: rebase requested" in out
+            and cmd_send(cfg, g5, gw5, root, now + timedelta(hours=26)) == ["nothing ready"],
+        )
+        gl_data[f"{api}/merge_requests/2985"] = dict(mr0, has_conflicts=True)
+        lines, _ = cmd_plan(cfg, g5, root, now, gl)
+        check(
+            "P5: a conflict asks for the resolved series as a pull request",
+            any(
+                "conflict NS3-003/!2985/83a80c744c10: blocked" in x and "patches/NS3-003/2985/" in x
+                for x in lines
+            ),
+        )
+        os.makedirs(os.path.join(root, "patches/NS3-003/2985"))
+        patch = (
+            "From 0123 Mon Sep 17 00:00:00 2001\nFrom: x\nSubject: [PATCH] dsdv: guard\n\n"
+            "Body.\n\nAssisted-by: Claude\n---\n src/dsdv/a.cc | 1 +\n"
+        )
+        with open(os.path.join(root, "patches/NS3-003/2985/0001-guard.patch"), "w") as fh:
+            fh.write(patch.replace("Assisted-by: Claude\n", ""))
+        check(
+            "P5: a patch without Assisted-by is refused by lint and by the plan",
+            any("0001-guard.patch: its commit message lacks" in x for x in lint_files(cfg, root))
+            and any(
+                x.startswith("push NS3-003/!2985/") and "blocked" in x
+                for x in cmd_plan(cfg, g5, root, now, gl)[0]
+            ),
+        )
+        with open(os.path.join(root, "patches/NS3-003/2985/0001-guard.patch"), "w") as fh:
+            fh.write(patch)
+        cmd_plan(cfg, g5, root, now, gl)
+        ran = []
+
+        def git(args, env):
+            ran.append((args, env))
+            return "f" * 40 + "\n" if "rev-parse" in args else ""
+
+        f5.clock = "2026-11-18T13:00:00Z"
+        out = cmd_send(cfg, g5, gw5, root, now + timedelta(hours=49), runner=git)
+        push = [a for a, _ in ran if "push" in a]
+        check(
+            "P5: the series is applied on master and pushed to our fork's source branch, with lease",
+            any(x.startswith("push NS3-003/!2985/") and "pushed ffffffffffff" in x for x in out)
+            and push
+            and f"--force-with-lease={mr0['source_branch']}:{mr0['sha']}" in push[0]
+            and "https://gitlab.com/danieljoppi/ns-3-dev.git" in push[0]
+            and not any("tok" in " ".join(a) for a, _ in ran)
+            and all("Authorization: Basic" in e["GIT_CONFIG_VALUE_0"] for _, e in ran),
+        )
+        check(
+            "P5 scope: no push to an MR not ours",
+            refused(
+                lambda: push_series(cfg, gw5, dict(mr0, author={"username": "x"}), [], git),
+                "not ours",
+            ),
+        )
+        gl_data[f"{GITLAB}/api/v4/projects/7128405"] = {"path_with_namespace": "nsnam/ns-3-dev"}
+        check(
+            "P5 scope: the upstream project itself is never a push target",
+            refused(
+                lambda: push_series(cfg, gw5, dict(mr0, source_project_id=7128405), [], git),
+                "not our fork",
+            ),
+        )
+        gl_data[f"{api}/merge_requests/2985"] = dict(mr0, detailed_merge_status="mergeable")
+        disc = gl_data[f"{GITLAB}/nsnam/ns-3-dev/-/merge_requests/2985/discussions.json"]
+        disc.append(
+            {
+                "notes": [
+                    {
+                        "id": "3999999990",
+                        "system": False,
+                        "note": "Attribution added.",
+                        "created_at": "2026-11-01T10:00:00.000Z",
+                        "author": {"username": "danieljoppi", "name": "Daniel"},
+                    }
+                ]
+            }
+        )
+        shutil.rmtree(os.path.join(root, "patches"))
+        lines, _ = cmd_plan(cfg, g5, root, now + timedelta(days=30), gl)
+        sch = [c["body"] for c in f5.comments[t5] if "upstream-scheduled: review" in c["body"]]
+        check(
+            "P5: no reviewer a week after our answer: one fixed review request, footer included",
+            len(sch) == 1 and REVIEW_REQUEST in sch[0] and DISCLOSURE in sch[0],
+        )
+        disc.pop()
+        gl_data[f"{api}/merge_requests/2985"] = mr0
+
+    # P7 credentials: skip without the App, check its access before rotating, store, or report
+    class FakeApp:
+        def __init__(self, status=None, put_fails=False):
+            self.status, self.put_fails, self.calls = status, put_fails, []
+
+        def transport(self, method, url, headers, body=None):
+            self.calls.append((method, url, body))
+            if self.status:
+                raise HttpError(method, url, self.status, "Resource not accessible by integration")
+            if method == "GET":
+                return 200, {"key": "a2V5", "key_id": "k1"}
+            if self.put_fails:
+                raise HttpError(method, url, 500, "boom with glpat-NEWSECRET")
+            return 204, None
+
+    def tok(created, expires="2027-01-01"):
+        gl_data[f"{GITLAB}/api/v4/personal_access_tokens/self"] = {
+            "created_at": created,
+            "expires_at": expires,
+        }
+        return GitLab("nsnam/ns-3-dev", "glpat-OLD", gl_transport)
+
+    f7 = FakeGitHub()
+    g7 = GitHub("o/r", "t", f7.transport)
+    enc = lambda k, v: "ENC(" + str(len(v)) + ")"  # noqa: E731
+    check(
+        "P7: no App token, a clear skip",
+        cmd_rotate(tok("2026-08-01T00:00:00Z"), None, g7, "o/r", "gitlab-write", now)[0].endswith(
+            "(one-time step: the App's secrets: write)"
+        ),
+    )
+    gl_calls.clear()
+    a403 = FakeApp(status=403)
+    out = cmd_rotate(
+        tok("2026-08-01T00:00:00Z"),
+        GitHub("o/r", "a", a403.transport),
+        g7,
+        "o/r",
+        "gitlab-write",
+        now,
+        enc,
+    )
+    check(
+        "P7: without secrets: write, skipped before anything is rotated",
+        "grant it secrets: write" in out[0] and not any("rotate" in c[1] for c in gl_calls),
+    )
+    ok = FakeApp()
+    out = cmd_rotate(
+        tok("2026-11-01T00:00:00Z"),
+        GitHub("o/r", "a", ok.transport),
+        g7,
+        "o/r",
+        "gitlab-read",
+        now,
+        enc,
+    )
+    check(
+        "P7: a young token is left alone",
+        out == ["P7 gitlab-read: token is 15 days old; rotates at 60"],
+    )
+    out = cmd_rotate(
+        tok("2026-09-01T00:00:00Z"),
+        GitHub("o/r", "a", ok.transport),
+        g7,
+        "o/r",
+        "gitlab-write",
+        now,
+        enc,
+    )
+    put = [c for c in ok.calls if c[0] == "PUT"]
+    check(
+        "P7: an old token is rotated and stored, encrypted, as the environment secret",
+        out
+        == ["P7 gitlab-write: rotated (token was 76 days old), stored as the environment secret"]
+        and put
+        and put[0][1].endswith("/environments/gitlab-write/secrets/GITLAB_TOKEN")
+        and put[0][2] == {"encrypted_value": "ENC(15)", "key_id": "k1"},
+    )
+    bad = FakeApp(put_fails=True)
+    out = cmd_rotate(
+        tok("2026-09-01T00:00:00Z"),
+        GitHub("o/r", "a", bad.transport),
+        g7,
+        "o/r",
+        "gitlab-write",
+        now,
+        enc,
+    )
+    opened = [i for i in f7.issues.values() if i["title"].startswith("[P7]")]
+    check(
+        "P7: a failed store opens an issue, and no token text leaks",
+        out == ["P7 gitlab-write: rotation failed; issue opened"]
+        and len(opened) == 1
+        and "NEWSECRET" not in json.dumps(opened)
+        and "glpat-OLD" not in json.dumps(f7.calls),
+    )
     # the command line: validate and a dry read of the repository's own register run offline
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "t.toml")

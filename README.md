@@ -22,8 +22,8 @@ maintainer approves it.
 **Status (2026-11-16): the design is decided
 ([ADR-0002](docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md), #2).
 P2 read runs every 6 h; P0 draft, P1 verify (`verify.yml`), P3 publish and
-P4 reply (`send.yml`) and P6 lifecycle (`lifecycle.yml`) run with their
-guards; P5 MR maintenance and P7 credentials are being built (#2).** Nothing reaches GitLab until the
+P4 reply and P5 MR maintenance (`send.yml`), P6 lifecycle (`lifecycle.yml`)
+and P7 credentials (`rotate.yml`) are built with their guards (#2).** Nothing reaches GitLab until the
 maintainer has stored the GitLab tokens.
 
 ## How it works
@@ -108,6 +108,8 @@ sequenceDiagram
 | P2 read | [`read.yml`](.github/workflows/read.yml), every 6 h | for every item of [`tracked.toml`](tracked.toml): opens its mirror ticket if it has none, fetches each GitLab issue and merge request (state, `detailed_merge_status`, reviewers, approvals, head pipeline, labels) into the ticket's status block, adds each new GitLab note as a comment (author, date, link; deduplicated by note id), and comments when the stall flags change: no activity for 14 days, `need_rebase` or conflicts, no reviewer, an unanswered question, a competing merge request. Runs without a token (GitLab's public pages) |
 | P1 verify | [`verify.yml`](.github/workflows/verify.yml), weekly and on a register change | for each open item with a `reproduce` table: builds ns-3-dev `master` with the `ns3-dev` toolchain, runs the reproducer, and records the result on the mirror ticket; a report is sent only after a "reproduces" from the last 7 days |
 | P6 lifecycle | [`lifecycle.yml`](.github/workflows/lifecycle.yml), daily | when an `ns-3.X` tag contains the merge commit of our merge request: "fixed in ns-3.X" on the ticket, one issue per workaround, and the RCAPA ticket closed when they are all closed |
+| P5 MR maintenance | [`send.yml`](.github/workflows/send.yml), with P3/P4 | on our merge requests: `need_rebase` → GitLab's rebase API; a conflict → asks for the resolved series as `patches/NS3-NNN/<mr>/` by PR (each commit with `Assisted-by: Claude`), then pushes it to our fork's source branch with `--force-with-lease`; no reviewer a week after our answer → a fixed review request, at most once per 30 days. Each waits out the veto window |
+| P7 credentials | [`rotate.yml`](.github/workflows/rotate.yml), weekly | rotates each environment's GitLab token at 60 days and stores the new one with the org App's token, checked first; a failure opens an issue |
 | P3 publish, P4 reply | [`send.yml`](.github/workflows/send.yml), hourly and on a merge | the plan job (no secret) checks the guards and schedules each post on its ticket with the exact text; the send job (environment `gitlab-write`) posts what is due and links it back |
 
 `tracked.toml` is the register and the allowlist: one `[[item]]` per report
@@ -143,7 +145,7 @@ RCAPA ticket in swarm-routing/ns3-tools, and the RCAPA ticket links back.
   `gitlab-read` (`read_api`, optional) and `gitlab-write` (`api`,
   `write_repository`), both deploying from `main` only, both code in
   `.github/org-sync.toml`. Jobs holding the token run only `main`'s code, use
-  no third-party action, and every action is pinned by SHA; no workflow runs
+  only GitHub's and the org's own actions, and every action is pinned by SHA; no workflow runs
   on a fork's pull request with a secret.
 - **GitLab text is data.** Notes quoted here are neutralised (no hidden
   markers, no `@mentions`, no `#N` links).
