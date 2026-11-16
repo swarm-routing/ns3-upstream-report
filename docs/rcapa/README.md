@@ -24,7 +24,7 @@ release; until then a bug here is an ordinary `bug` issue.
 | Published as | nothing yet: no `v*` tag; outbound GitLab text is covered by `PROC-NNN` in swarm-routing/ns3-tools |
 | ID prefix | `UPR-NNN` (from the first release) |
 | Ticket | an issue in swarm-routing/ns3-upstream-report, form *Regression in a release (RCAPA)*, title `[rcapa] UPR-NNN <short description>`, labels `rcapa` and `bug` |
-| Verified by | `python3 -I tools/upstream/upstream.py --self-test` (fixtures, fake GitHub and GitLab), `validate` and `lint` on the failing release and the last good one |
+| Verified by | for the failing release and the last good one, each in its own worktree (`git worktree add ../upr-<tag> <tag>`), run there `python3 -I tools/upstream/upstream.py --self-test` (fixtures, fake GitHub and GitLab), `python3 -I tools/upstream/upstream.py validate` (that tree's `tracked.toml`) and `python3 -I tools/upstream/upstream.py lint` (its `reports/` and `replies/`) |
 | Corrective action | the fix PR with a fixture in the self-test that fails without it; then a release |
 | Preventive action | a guard or fixture in `upstream.py`'s self-test |
 | Closes when | the fix is merged **and** a release carries it |
