@@ -14,7 +14,7 @@ here=tools/upstream/proof
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 worlds=("$@")
-if [ "${#worlds[@]}" -eq 0 ]; then
+if [[ "${#worlds[@]}" -eq 0 ]]; then
   python3 -I "$here/fixtures_world.py" "$tmp/world-fixtures.json"
   worlds=("$tmp/world-fixtures.json")
 fi

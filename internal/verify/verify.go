@@ -55,7 +55,7 @@ func RealShell(dir string) Shell {
 	return func(cmd string, timeout time.Duration) Proc {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		c := exec.CommandContext(ctx, "bash", "-c", cmd)
+		c := exec.CommandContext(ctx, "/bin/bash", "-c", cmd)
 		c.Dir = dir
 		var o, e bytes.Buffer
 		c.Stdout, c.Stderr = &o, &e

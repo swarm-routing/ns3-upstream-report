@@ -5,9 +5,23 @@
 writes (method, URL, JSON body) of the two tools; prints one line per command."""
 
 import json
+import os
 import sys
+import tempfile
 
-py, go = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:3])
+
+def inside(path):
+    """`path` resolved, refused unless it lies in the working directory or the temporary
+    directory (the proof reads and writes nowhere else)."""
+    full = os.path.realpath(path)
+    for base in (os.getcwd(), tempfile.gettempdir()):
+        root = os.path.realpath(base)
+        if os.path.commonpath([root, full]) == root:
+            return full
+    raise SystemExit(f"refused: {path} is outside the working and the temporary directory")
+
+
+py, go = (json.load(open(inside(p), encoding="utf-8")) for p in sys.argv[1:3])
 bad = 0
 for a, b in zip(py, go, strict=True):
     same = (

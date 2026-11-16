@@ -7,10 +7,22 @@ self-test's recorded GitLab pages of nsnam/ns-3-dev, 2026-11-16) and an empty Gi
 import json
 import os
 import sys
+import tempfile
 
 FX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures")
 GL = "https://gitlab.com"
 API = f"{GL}/api/v4/projects/nsnam%2Fns-3-dev"
+
+
+def inside(path):
+    """`path` resolved, refused unless it lies in the working directory or the temporary
+    directory (the proof reads and writes nowhere else)."""
+    full = os.path.realpath(path)
+    for base in (os.getcwd(), tempfile.gettempdir()):
+        root = os.path.realpath(base)
+        if os.path.commonpath([root, full]) == root:
+            return full
+    raise SystemExit(f"refused: {path} is outside the working and the temporary directory")
 
 
 def load(name):
@@ -45,5 +57,5 @@ world = {
         {},
     ],
 }
-with open(sys.argv[1], "w", encoding="utf-8") as f:
+with open(inside(sys.argv[1]), "w", encoding="utf-8") as f:
     json.dump(world, f, indent=1, ensure_ascii=False)
