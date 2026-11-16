@@ -66,8 +66,8 @@ jobs:
       flags: go
 
   # SonarQube Cloud, CI-based analysis (Automatic Analysis is off for this project,
-  # maintainer 2026-11-16): sonar-project.properties, with the Go coverage profile the
-  # `go` job keeps (go-coverage/coverage.out). The quality gate posts as its own check.
+  # maintainer 2026-11-16): sonar-project.properties, with a Go coverage profile of every
+  # package by every test. The quality gate posts as its own check.
   sonar:
     needs: go
     if: always() && needs.go.result != 'skipped'
@@ -85,11 +85,20 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0  # SonarQube Cloud reads the history (blame, new code)
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        timeout-minutes: 2
-        with:
-          name: go-coverage
-          path: coverage
+      # The coverage SonarQube Cloud reads is of every package by every test
+      # (-coverpkg=./...): reusable-go-ci.yml's profile counts each package by its own
+      # tests only, so code the command-line tests run (internal/github, the write
+      # client) would read as uncovered. Built and run as the `go` job builds it.
+      - name: Go (the go.mod toolchain)
+        uses: ./.github/actions/upstream
+        timeout-minutes: 5
+      - name: Coverage of every package by every test
+        timeout-minutes: 10
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          mkdir -p coverage
+          go test -covermode=atomic -coverpkg=./... -coverprofile=coverage/coverage.out ./...
       - name: SonarQube Cloud token
         id: token
         env:
