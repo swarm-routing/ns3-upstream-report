@@ -61,9 +61,8 @@ jobs:
         env:
           ITEM: ${{ matrix.item }}
         run: |
-          mkdir -p results
           python3 -I bridge/tools/upstream/upstream.py verify --tracked bridge/tracked.toml \
-            "$ITEM" --ns3 /tmp/ns-3-dev --out "results/$ITEM.json"
+            "$ITEM" --ns3 /tmp/ns-3-dev
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
