@@ -4,7 +4,7 @@
 | Group | Badges |
 | --- | --- |
 | Build | [![CI](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml/badge.svg)](https://github.com/swarm-routing/ns3-upstream-report/actions/workflows/ci.yml) |
-| Release | [![Licence: GPL-2.0-only, cmd/ internal/ MIT OR GPL-2.0-only](https://img.shields.io/badge/licence-GPL--2.0--only%2C%20cmd%2F%20internal%2F%20MIT%20OR%20GPL--2.0--only-blue)](LICENSING.md) |
+| Release | [![Release](https://img.shields.io/github/v/release/swarm-routing/ns3-upstream-report?sort=semver&cacheSeconds=1800)](https://github.com/swarm-routing/ns3-upstream-report/releases) [![Cite](https://img.shields.io/badge/cite-CITATION.cff-blue)](CITATION.cff) [![Licence: GPL-2.0-only, cmd/ internal/ MIT OR GPL-2.0-only](https://img.shields.io/badge/licence-GPL--2.0--only%2C%20cmd%2F%20internal%2F%20MIT%20OR%20GPL--2.0--only-blue)](LICENSING.md) |
 | Trust | [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/swarm-routing/ns3-upstream-report/badge)](https://scorecard.dev/viewer/?uri=github.com/swarm-routing/ns3-upstream-report) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16822/badge)](https://www.bestpractices.dev/projects/16822) |
 | Stack | [![Go 1.27](https://img.shields.io/badge/go-1.27-blue?logo=go)](go.mod) |
 | Community & docs | [![Open RCAPA](https://img.shields.io/github/issues/swarm-routing/ns3-upstream-report/rcapa?label=open%20RCAPA&color=blue)](https://github.com/swarm-routing/ns3-upstream-report/blob/main/docs/rcapa/README.md) [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow)](https://www.conventionalcommits.org) |
@@ -170,6 +170,16 @@ read a red run. How changes are proposed, reviewed and released is the org's
 Whether a regression here gets an RCAPA (root cause analysis with corrective
 and preventive actions), and how: [docs/rcapa/README.md](docs/rcapa/README.md).
 <!-- org-sync:end develop -->
+
+<!-- org-sync:begin citing -->
+## Releases & citing
+
+Versions follow [SemVer](https://semver.org). Each release is listed under [Releases](https://github.com/swarm-routing/ns3-upstream-report/releases), built by the org's release workflow and archived on [Zenodo](https://zenodo.org) with its own DOI.
+
+To cite this repository, use the “Cite this repository” button (from [CITATION.cff](CITATION.cff)). It has no DOI yet: the concept DOI appears here and in the badge above once Zenodo archives its first release.
+
+Using it in your work? Contributions are welcome, and citing it helps just as much.
+<!-- org-sync:end citing -->
 
 ## Contributing
 

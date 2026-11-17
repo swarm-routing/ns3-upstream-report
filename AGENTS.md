@@ -36,6 +36,8 @@ replies/                     P0/P4: NS3-NNN/<note-id>.md, a reply to that mirror
 .github/workflows/maintain.yml    P5: daily, environment gitlab-write: rebase API, review request, conflict pull request (org bot token)
 .github/workflows/rotate.yml      P7: weekly, environment gitlab-write: the token rotated at 60 days, stored in both environments (org App)
 .github/ISSUE_TEMPLATE/upstream-report.yml   the mirror ticket's form
+.github/workflows/release.yml     releases through swarm-routing/.github's reusable-release.yml, on the maintainer's request only; no GitLab token (swarm-routing/.github#636)
+.cz.toml, CITATION.cff       Commitizen config and citation metadata; `make dist` packs the source tree; docs/roadmap.md: the release ladder
 docs/adr/0002-…              the zero-manual design, the guards, the identity risk, D1–D5
 docs/adr/0003-…              the bridge is Go: the port, the single token and its compensations
 ```

@@ -7,6 +7,9 @@ bestpractices_project = "16822"
 badges = ["ci", "release", "doi", "cite", "vcpkg", "pypi", "licence", "conventional", "arena", "scorecard", "bestpractices", "rcapa", "ns3-bugs"]
 title = "ns3-upstream-report"
 dual = ["cmd/", "internal/"]
+# CITATION.cff seed and cite badge (swarm-routing/.github#636: versioned releases). Once
+# Zenodo archives the first release, org-bot's `zenodo` task sets zenodo_concept.
+citation = true
 # the org's issue forms, copied: this repository has its own form (upstream-report.yml)
 forms = true
 posture = "the org's bridge to ns-3's GitLab: one Go tool (cmd/upstream) and its workflows, no simulation code"
