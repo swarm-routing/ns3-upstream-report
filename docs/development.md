@@ -112,6 +112,7 @@ actionlint .github/workflows/*.yml
 | `scorecard.yml` | OpenSSF Scorecard | no |
 | `sync-labels.yml` | the org's labels | no |
 | `read.yml`, `send.yml`, `verify.yml`, `lifecycle.yml`, `maintain.yml`, `rotate.yml` | the bridge itself (schedules, merges) | no |
+| `release.yml` | a release, on the maintainer's dispatch (dry-run, bump; merging the bump PR publishes) | no |
 
 The "yes" rows are required once swarm-routing/.github's `repo-settings`
 applies this repository's `[settings]` (dispatched right after the first
@@ -121,9 +122,16 @@ through a merge queue: enable auto-merge on a PR.
 
 ## Release
 
-Nothing is released: the workflows run from `main`, so a merged change is
-live at the next run. See [CONTRIBUTING "Cutting a release"](https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#cutting-a-release)
-if that ever changes.
+The workflows run from `main`, so a merged change is live at the next run.
+The repository also carries versioned releases (swarm-routing/.github#636),
+cut on the maintainer's request only: `.github/workflows/release.yml` calls
+swarm-routing/.github's `reusable-release.yml` (dispatch `dry-run`, then
+`bump`; merging the bot's `chore(release): bump version A to B` PR tags
+`vX.Y.Z` and publishes `ns3-upstream-report-X.Y.Z.tar.gz`, the source tree
+at that commit, written by `make dist`), with `.cz.toml` (Commitizen) and
+`CITATION.cff`. It holds no GitLab token. The ladder is
+[roadmap.md](roadmap.md); the procedure is
+[CONTRIBUTING "Cutting a release"](https://github.com/swarm-routing/.github/blob/main/CONTRIBUTING.md#cutting-a-release).
 
 ## Troubleshooting
 
