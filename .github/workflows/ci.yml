@@ -62,7 +62,7 @@ jobs:
 
   codecov:
     needs: go
-    if: always() && needs.go.result != 'skipped'
+    if: ${{ !cancelled() && needs.go.result != 'skipped' }}
     permissions:
       contents: read
       id-token: write
@@ -76,7 +76,7 @@ jobs:
   # package by every test. The quality gate posts as its own check.
   sonar:
     needs: go
-    if: always() && needs.go.result != 'skipped'
+    if: ${{ !cancelled() && needs.go.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
