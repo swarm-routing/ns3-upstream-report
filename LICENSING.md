@@ -13,6 +13,9 @@ Licensed per directory, as AntHocNet
 | `.github/ISSUE_TEMPLATE/` forms copied from swarm-routing/.github (`forms = true`) | `MIT OR GPL-2.0-only`, as their source: org-sync keeps them byte-identical to the org's forms |
 | everything else (workflows, the register, docs) | `GPL-2.0-only` |
 
-`MIT OR GPL-2.0-only` means you may use that code under either licence, at
-your option ([LICENSE-MIT](LICENSE-MIT) or [LICENSE](LICENSE)). Every source
-file carries its SPDX identifier; CI checks it (`reusable-licence-check.yml`).
+<!-- org-sync:begin licence-texts -->
+Texts: [`LICENSE`](LICENSE) (GPL-2.0) and [`LICENSE-MIT`](LICENSE-MIT) (the
+MIT option). Each source file states its licence in its
+`SPDX-License-Identifier` line; CI checks it
+(`swarm-routing/.github` `cmd/check-headers`; locally `make headers`).
+<!-- org-sync:end licence-texts -->
