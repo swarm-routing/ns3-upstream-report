@@ -46,7 +46,7 @@ func Post(cfg *register.Config, gh *github.Client, gw *gitlabwrite.Client, r *br
 		}
 		url = u
 		marker = fmt.Sprintf("%s -> %s#%d", c.Key, proj, iid)
-		msg = fmt.Sprintf("Published as [%s#%d](%s). Add `issue = %d` and `state = \"published\"` to %s in tracked.toml.", proj, iid, u, iid, r.Item.ID)
+		msg = fmt.Sprintf("Published as [%s#%d](%s). The lifecycle workflow opens the pull request that records `issue = %d` and `state = \"published\"` for %s in tracked.toml.", proj, iid, u, iid, r.Item.ID)
 		*history = append(*history, bridge.Post{Key: c.Key, Kind: "#", IID: iid, When: now})
 	} else {
 		nid, err := gw.R.NoteWithText(c.Kind, c.Target, c.Text)

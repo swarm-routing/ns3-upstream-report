@@ -53,7 +53,7 @@ func deps(t *testing.T, root, pkg string, seen map[string]bool) {
 func TestReadCannotWrite(t *testing.T) {
 	root, _ := filepath.Abs("../..")
 	writer := module + "internal/gitlabwrite"
-	for _, p := range []string{"internal/mirror", "internal/lifecycle", "internal/verify", "internal/bridge", "internal/gitlab", "internal/github", "internal/register"} {
+	for _, p := range []string{"internal/mirror", "internal/lifecycle", "internal/record", "internal/verify", "internal/bridge", "internal/gitlab", "internal/github", "internal/register"} {
 		seen := map[string]bool{}
 		deps(t, root, module+p, seen)
 		if seen[writer] {

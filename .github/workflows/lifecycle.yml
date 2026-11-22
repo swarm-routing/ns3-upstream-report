@@ -9,9 +9,18 @@ name: lifecycle
 # all of them are closed (PROC-001). GitLab is read without a token; the
 # issues in other repositories need the org bot's token (BOT_APP_ID and
 # BOT_APP_PRIVATE_KEY): without it the run says what waits for it.
+# It also records P3's publishes: when a report went out (the `upstream-sent:
+# publish` marker) and tracked.toml lacks its issue, the org bot opens the pull
+# request that sets `state = "published"` and `issue` (internal/record). That is
+# why it runs after every send run too: workflow_run runs main's workflow and
+# code, and this job holds no GitLab token.
 on:
   schedule:
     - cron: '47 3 * * *'
+  workflow_run:
+    workflows: [send]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions: {}
@@ -40,7 +49,7 @@ jobs:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           fallback-token: ${{ secrets.ORG_BOT_TOKEN }}
-      - name: Releases, workaround issues, RCAPA tickets
+      - name: Releases, workaround issues, RCAPA tickets, the register pull request
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BOT_TOKEN: ${{ steps.bot.outputs.token }}
