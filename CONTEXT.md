@@ -12,9 +12,11 @@ pipelines moved from Python to one Go tool, `cmd/upstream` (ADR-0003).
 `read.yml` runs every 6 h; `send.yml` plans and sends merged reports and
 replies after the veto window; `verify.yml` (P1), `maintain.yml` (P5),
 `lifecycle.yml` (P6) and `rotate.yml` (P7) run on their schedules. Tracked: NS3-003
-(https://gitlab.com/nsnam/ns-3-dev/-/issues/1364,
-https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985, competing
-https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011; RCAPA ticket
+(https://gitlab.com/nsnam/ns-3-dev/-/issues/1364, competing
+https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011; our
+https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985 was closed on
+2026-11-22, as the org authors no merge requests to ns-3 (ADR-0002
+amendment); RCAPA ticket
 swarm-routing/ns3-tools#240), and the drafts NS3-001 (swarm-routing/ns3-containers#55,
 swarm-routing/ns3-tools#238) and NS3-002 (swarm-routing/ns3-tools#206,
 swarm-routing/ns3-tools#239), not filed yet (swarm-routing/.github#519).
