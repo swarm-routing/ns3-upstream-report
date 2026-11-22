@@ -1,6 +1,6 @@
 # 0002. A zero-manual pipeline to ns-3's GitLab
 
-- **Status:** accepted; its token scopes, D3 (the push of a resolved branch) and the tool's language superseded by [0003](0003-the-bridge-is-go.md)
+- **Status:** accepted; its token scopes, D3 (the push of a resolved branch) and the tool's language superseded by [0003](0003-the-bridge-is-go.md); amended 2026-11-22: no merge requests of ours to ns-3 (below)
 - **Date:** 2026-11-16
 - **Issue:** #2 (decisions D1 to D5: https://github.com/swarm-routing/ns3-upstream-report/issues/2#issuecomment-6917989105)
 
@@ -98,3 +98,44 @@ The diagrams are the README's ("How it works").
   everything; a mistake that passes the PR review and the guards still goes
   out unless someone holds it within the window.
 - A merged file is sent once; to send something else, merge a new file.
+
+## Amendment (2026-11-22): no merge requests of ours to ns-3
+
+Maintainer decision, 2026-11-22: "We are not planning to work in a MR on
+ns3 and we should close our MR and let another one to do the fix."
+
+The org does not author or maintain merge requests to `nsnam/ns-3-dev`. It
+reports bugs, tests fixes against its reproducers, and follows other
+people's fixes to a release. The maintainer closed our
+https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985 (NS3-003,
+https://gitlab.com/nsnam/ns-3-dev/-/issues/1364) on GitLab at
+2026-11-22T19:30:43Z. The bridge itself still never closes anything
+upstream (guard 3). `tracked.toml` lists NS3-003 with `issue = 1364` and
+`competing = [3011]` only.
+
+What this changes, and what it does not:
+
+- **The record.** The four commits of !2985 remain readable on GitLab:
+  `e19b518f` (do not send queued packets when the next-hop lookup fails),
+  `13397fca` (the advertisement root-cause fix: advertise the address of
+  the interface a message is sent from), `70399d9e` (invoke the error
+  callback when dropping queued packets) and `aead3416` (a regression test
+  for a multi-interface chain). The competing
+  https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011 has only the
+  guard. If the other three matter to ns-3, our part is to say so in a
+  reply on the issue, never to reopen a merge request of ours.
+- **P5 MR maintenance** (`maintain.yml`, `internal/maintain`) stays in the
+  code. It works on an item's `merge_requests` only, and no item lists any,
+  so it has nothing to do: each run is a no-op. It is not disabled. A
+  disabled workflow is a state outside the repository that someone has to
+  remember, and a register entry with `merge_requests` would be the visible
+  change that brings it back, through review. Guard 3's "merge requests
+  from the fork, and rebasing our merge requests" stays code with nothing
+  to act on.
+- **P6 lifecycle** follows `competing` merge requests and the issue's
+  closing merge request to a release (#55), so a fix by someone else still
+  sets "fixed in ns-3.X", opens the workaround issues and closes the RCAPA
+  ticket.
+- **Replies** (P4) post only on the item's own issue and merge requests;
+  with no merge request of ours, that is the issue. A competing merge
+  request is never a thread we write to.
