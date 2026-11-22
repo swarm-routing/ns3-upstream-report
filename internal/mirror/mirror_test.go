@@ -207,6 +207,52 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// A withdrawn merge request of ours: its notes are mirrored (so a reply can answer
+// them), it is no stall to maintain, and it is not a competing merge request.
+func TestReadWithdrawn(t *testing.T) {
+	m, err := register.Parse(fake.RegisterWithdrawn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gh := github.New("o/r", "t", fg.Transport, false)
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	if _, err := CmdRead(cfg, gl, gh, now); err != nil {
+		t.Fatal(err)
+	}
+	t3 := fg.Ticket("NS3-003")
+	if n := len(mirrored(fg, t3)); n != len(userNotes()) {
+		t.Errorf("every user note of the issue and of the withdrawn !2985 is mirrored: %d of %d", n, len(userNotes()))
+	}
+	body3 := fg.Issues[t3]["body"].(string)
+	if !strings.Contains(body3, "| [!2985](https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985) (withdrawn) |") {
+		t.Errorf("the status block marks !2985 withdrawn:\n%s", body3)
+	}
+	var flags string
+	for _, b := range fg.Bodies(t3) {
+		if strings.HasPrefix(b, "<!-- upstream-flags:") {
+			flags = b
+		}
+	}
+	// the fixture's !2985 is still opened with need_rebase and no reviewer: not a stall of a withdrawn merge request
+	if strings.Contains(flags, "need_rebase") || strings.Contains(flags, "no reviewer") ||
+		strings.Contains(flags, "competing merge request [!2985]") || !strings.Contains(flags, "competing merge request [!3011]") {
+		t.Errorf("no rebase or review stall, and !2985 is not a competing merge request:\n%s", flags)
+	}
+	// closed on GitLab, then asked about: the question is mirrored, ready for a reply file
+	mr := fl.MR(2985)
+	mr["state"] = "closed"
+	fl.SetMR(2985, mr)
+	fl.AddNote("!", 2985, "4296202058", "tomhenderson", "@danieljoppi, why did you decide to close this?", "2026-11-22T19:45:00.000Z")
+	out, _ := CmdRead(cfg, gl, gh, now)
+	cs := mirrored(fg, t3)
+	if !contains(out, "NS3-003: mirrored 1 note(s) on #1") ||
+		strings.SplitN(cs[len(cs)-1], "\n", 2)[0] != "<!-- gitlab-note: nsnam/ns-3-dev!2985 4296202058 -->" {
+		t.Errorf("a note on the closed, withdrawn !2985 is mirrored: %v", out)
+	}
+}
+
 func contains(l []string, s string) bool {
 	for _, x := range l {
 		if x == s {

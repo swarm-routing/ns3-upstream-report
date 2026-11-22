@@ -73,7 +73,7 @@ func (m *Maintainer) candidates(it *register.Item, ticket map[string]any, commen
 			maintained[k] = true
 		}
 	}
-	for _, mr := range it.MergeRequests {
+	for _, mr := range it.MergeRequests { // never it.Withdrawn: a withdrawn merge request is not maintained
 		st, err := m.GW.R.Item("!", mr)
 		if err != nil {
 			return nil, err

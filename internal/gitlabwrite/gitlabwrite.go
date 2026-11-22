@@ -4,7 +4,7 @@
 // Package gitlabwrite is the bridge's only GitLab writer, imported only by send,
 // maintain and rotate. Every write passes the scope guard first: nsnam/ns-3-dev
 // only; a new issue, a note on one of the item's own threads, GitLab's rebase of
-// one of the item's own merge requests, or the token's self-rotation; never a
+// one of the item's own live (not withdrawn) merge requests, or the token's self-rotation; never a
 // close, label, approval, merge or push.
 package gitlabwrite
 
@@ -29,13 +29,16 @@ type Thread struct {
 
 // Client writes; R reads (already-sent checks need it).
 type Client struct {
-	R       *gitlab.Client
-	Allowed map[Thread]bool // the threads notes and rebases may go to
-	Dry     bool
+	R         *gitlab.Client
+	Allowed   map[Thread]bool // the threads notes and rebases may go to
+	NotesOnly map[Thread]bool // allowed threads that take notes but never a rebase (a withdrawn merge request)
+	Dry       bool
 }
 
 // New is a writer over a reader.
-func New(r *gitlab.Client) *Client { return &Client{R: r, Allowed: map[Thread]bool{}} }
+func New(r *gitlab.Client) *Client {
+	return &Client{R: r, Allowed: map[Thread]bool{}, NotesOnly: map[Thread]bool{}}
+}
 
 var notesPath = regexp.MustCompile(`^/(issues|merge_requests)/([0-9]+)/(notes|rebase)$`)
 
@@ -52,7 +55,7 @@ func (c *Client) write(method, url string, body any) (map[string]any, error) {
 		th = &Thread{k, iid}
 	}
 	ok := c.R.Project == AllowedProject && strings.HasPrefix(url, c.R.API) && ((method == "POST" && rel == "/issues") ||
-		(th != nil && c.Allowed[*th] && (method == "POST" && m[3] == "notes" || method == "PUT" && m[3] == "rebase" && th.Kind == "!")))
+		(th != nil && c.Allowed[*th] && (method == "POST" && m[3] == "notes" || method == "PUT" && m[3] == "rebase" && th.Kind == "!" && !c.NotesOnly[*th])))
 	if !ok {
 		return nil, register.Exit("scope: %s %s is not a write the bridge may make", c.R.Project, rel)
 	}

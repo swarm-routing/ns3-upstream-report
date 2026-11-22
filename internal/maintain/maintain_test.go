@@ -140,6 +140,28 @@ func TestNotOursNorMerged(t *testing.T) {
 	}
 }
 
+// A withdrawn merge request of ours is never maintained, even while GitLab shows it
+// opened with need_rebase, conflicts or no reviewer (a reopen by someone else).
+func TestWithdrawnNotMaintained(t *testing.T) {
+	m, _ := register.Parse(fake.RegisterWithdrawn())
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gh := github.New("o/r", "t", fg.Transport, false)
+	if _, err := mirror.CmdRead(cfg, gitlab.New("nsnam/ns-3-dev", "", fl.Transport), gh, now); err != nil {
+		t.Fatal(err)
+	}
+	w := &world{cfg, fl, fg, gh, fg.Ticket("NS3-003")}
+	for _, conflicts := range []bool{false, true} {
+		mr := fl.MR(2985)
+		mr["has_conflicts"] = conflicts
+		fl.SetMR(2985, mr)
+		b := &bot{}
+		if out := w.run(t, now.Add(30*24*time.Hour), b); len(out) != 1 || out[0] != "nothing to maintain" || len(fl.Writes()) != 0 || len(b.calls) != 0 {
+			t.Errorf("P5 leaves a withdrawn merge request alone (conflicts %v): %v", conflicts, out)
+		}
+	}
+}
+
 func TestConflict(t *testing.T) {
 	w := setup(t)
 	mr := w.fl.MR(2985)

@@ -289,3 +289,47 @@ func TestDryRunWrites(t *testing.T) {
 		t.Error("a dry run still refuses a write out of scope")
 	}
 }
+
+// A withdrawn merge request of ours takes a reply to a mirrored note, never a rebase.
+func TestReplyOnWithdrawn(t *testing.T) {
+	m, err := register.Parse(fake.RegisterWithdrawn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := register.FromRaw(m)
+	root := t.TempDir()
+	fl, fk := fake.NewGitLab(), fake.NewGitHub()
+	mr := fl.MR(2985)
+	mr["state"] = "closed"
+	fl.SetMR(2985, mr)
+	fl.AddNote("!", 2985, "4296202058", "tomhenderson", "@danieljoppi, why did you decide to close this?", "2026-11-15T19:45:00.000Z")
+	write(t, root, "replies/NS3-003/4296202058.md", "Thanks for asking.\n")
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	gw := Writer(gitlab.New("nsnam/ns-3-dev", "tok", fl.Transport), false)
+	g := github.New("o/r", "t", fk.Transport, false)
+	if _, err := mirror.CmdRead(cfg, gl, g, now); err != nil {
+		t.Fatal(err)
+	}
+	t3 := fk.Ticket("NS3-003")
+	if lines, _, _ := bridge.CmdPlan(cfg, g, root, now); !has(lines, "reply NS3-003/4296202058: scheduled") {
+		t.Fatalf("a reply to a note of the withdrawn !2985 is scheduled: %v", lines)
+	}
+	later := now.Add(25 * time.Hour)
+	fk.Clock = later.Format(bridge.ISO)
+	fl.Calls = nil
+	if _, err := CmdSend(cfg, g, gw, root, later); err != nil {
+		t.Fatal(err)
+	}
+	p := posts(fl)
+	b := fk.Bodies(t3)
+	if len(p) != 1 || !strings.HasSuffix(p[0].URL, "/merge_requests/2985/notes") ||
+		p[0].Body.(map[string]any)["body"] != "Thanks for asking.\n\n---\n"+bridge.Disclosure ||
+		!strings.HasPrefix(b[len(b)-1], "<!-- upstream-sent: reply NS3-003/4296202058 -> nsnam/ns-3-dev!2985 note ") {
+		t.Errorf("the reply goes out as a note in the withdrawn merge request's thread: %v", p)
+	}
+	Allow(gw, cfg.Items[0])
+	fl.Calls = nil
+	if err := gw.Rebase(2985); !refused(err, "scope") || len(fl.Writes()) != 0 {
+		t.Errorf("the scope guard refuses a rebase of a withdrawn merge request: %v", err)
+	}
+}

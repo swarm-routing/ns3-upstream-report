@@ -51,4 +51,7 @@ rcapa = "swarm-routing/ns3-tools#240"
 issue = 1364
 # Our nsnam/ns-3-dev!2985 is withdrawn (closed on GitLab 2026-11-22): the org authors no merge
 # requests to ns-3; it reports, tests and follows others' fixes (maintainer decision 2026-11-22, ADR-0002).
+# `withdrawn` keeps its thread readable and answerable (read mirrors its notes, send may reply there),
+# while P5 never rebases it or asks for review, and P6 counts it only as the issue's closing merge request.
+withdrawn = [2985]
 competing = [3011]

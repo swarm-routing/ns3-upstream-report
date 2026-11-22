@@ -103,6 +103,38 @@ func TestRepositoryRegisterIsValid(t *testing.T) {
 	}
 }
 
+func TestWithdrawn(t *testing.T) {
+	m, err := Parse(fake.RegisterWithdrawn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := Validate(m); len(errs) != 0 {
+		t.Fatalf("withdrawn is a known key, and an item with only an issue and a withdrawn MR is valid: %v", errs)
+	}
+	it := FromRaw(m).Items[0]
+	if len(it.MergeRequests) != 0 || !it.IsWithdrawn(2985) || it.HasMR(2985) || it.IsWithdrawn(3011) {
+		t.Errorf("withdrawn is read apart from merge_requests: %+v", it)
+	}
+	first := m["item"].([]any)[0].(map[string]any)
+	for _, c := range []struct {
+		name  string
+		patch map[string]any
+		want  string
+	}{
+		{"bad withdrawn", map[string]any{"withdrawn": []any{"2985"}}, "withdrawn is not a list of merge request numbers"},
+		{"withdrawn and live", map[string]any{"merge_requests": []any{int64(2985)}}, "!2985 is in both merge_requests and withdrawn"},
+		{"withdrawn and competing", map[string]any{"competing": []any{int64(2985)}}, "!2985 is in both competing and withdrawn"},
+	} {
+		it := copyItem(first)
+		for k, v := range c.patch {
+			it[k] = v
+		}
+		if errs := Validate(withItem(m, it)); !anyContains(errs, c.want) {
+			t.Errorf("register refused: %s: %v", c.name, errs)
+		}
+	}
+}
+
 func TestLoadRefusesAnInvalidRegister(t *testing.T) {
 	d := t.TempDir()
 	p := filepath.Join(d, "t.toml")

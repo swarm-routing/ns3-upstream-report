@@ -4,10 +4,15 @@
 // Package register reads and validates tracked.toml, the register of upstream
 // reports and the allowlist of everything the bridge may send: one [[item]] per
 // NS3-NNN id (swarm-routing/ns3-tools docs/ns3-bugs.md) with its RCAPA ticket, its
-// state (draft, published, closed), its GitLab issue and merge requests, the
-// mirror ticket, the P1 evidence (`verified = { date, master, run }`), the P1
-// reproducer (`reproduce`), the workaround issues and, optionally, its own
-// `gate`. The top level sets the gate policy: `gate = "veto-window"` (default; a
+// state (draft, published, closed), its GitLab issue and merge requests
+// (`merge_requests`: ours, live), the competing ones (`competing`: not ours, read
+// only), the withdrawn ones (`withdrawn`: ours, closed on GitLab; read mirrors
+// their notes and send may reply in their threads, but P5 never maintains them,
+// the writer refuses their rebase, and P6 follows them only through the issue's
+// closing merge requests), the mirror ticket, the P1 evidence
+// (`verified = { date, master, run }`), the P1 reproducer (`reproduce`), the
+// workaround issues and, optionally, its own `gate`. A merge request number is in
+// at most one of the three lists. The top level sets the gate policy: `gate = "veto-window"` (default; a
 // post goes out `window_hours_new_issue` = 48 h after it is scheduled for a new
 // issue, `window_hours` = 24 h for a note), "auto" or "approve" (as soon as it is
 // scheduled).
@@ -31,7 +36,7 @@ var (
 	States   = []string{"draft", "published", "closed"}
 	Gates    = []string{"veto-window", "auto", "approve"}
 	ItemKeys = []string{"id", "title", "state", "rcapa", "issue", "merge_requests", "competing",
-		"mirror", "draft", "verified", "gate", "reproduce", "workarounds"}
+		"withdrawn", "mirror", "draft", "verified", "gate", "reproduce", "workarounds"}
 )
 
 // Patterns shared with the rest of the bridge.
@@ -57,6 +62,7 @@ type Item struct {
 	ID, Title, State, RCAPA, Gate string
 	Issue, Mirror                 int
 	MergeRequests, Competing      []int
+	Withdrawn                     []int // ours, closed: read and replied to, never maintained
 	Draft, Workarounds            []string
 	Verified                      map[string]string
 	Reproduce                     *Reproduce
@@ -289,12 +295,19 @@ func Validate(cfg map[string]any) []string {
 				}
 			}
 		}
-		for _, k := range []string{"merge_requests", "competing"} {
+		role := map[int64]string{}
+		for _, k := range []string{"merge_requests", "competing", "withdrawn"} {
 			l, ok := list(getd(it, k, []any{}))
 			for _, x := range l {
-				if i, isI := isInt(x); !isI || i <= 0 {
+				i, isI := isInt(x)
+				if !isI || i <= 0 {
 					ok = false
+					continue
 				}
+				if r, dup := role[i]; dup && r != k {
+					errors = append(errors, fmt.Sprintf("%s: !%d is in both %s and %s", where, i, r, k))
+				}
+				role[i] = k
 			}
 			if !ok {
 				errors = append(errors, fmt.Sprintf("%s: %s is not a list of merge request numbers", where, k))
@@ -436,6 +449,7 @@ func FromRaw(cfg map[string]any) *Config {
 		}
 		item.MergeRequests = ints(it["merge_requests"])
 		item.Competing = ints(it["competing"])
+		item.Withdrawn = ints(it["withdrawn"])
 		item.Draft = strs(it["draft"])
 		item.Workarounds = strs(it["workarounds"])
 		if v, ok := it["verified"].(map[string]any); ok && len(v) > 0 {
@@ -495,6 +509,9 @@ func (it *Item) HasMR(iid int) bool { return containsInt(it.MergeRequests, iid) 
 
 // IsCompeting is whether iid is one of the item's competing merge requests.
 func (it *Item) IsCompeting(iid int) bool { return containsInt(it.Competing, iid) }
+
+// IsWithdrawn is whether iid is one of the item's withdrawn merge requests (ours, closed).
+func (it *Item) IsWithdrawn(iid int) bool { return containsInt(it.Withdrawn, iid) }
 
 func containsInt(l []int, x int) bool {
 	for _, v := range l {

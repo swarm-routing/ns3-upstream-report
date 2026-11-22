@@ -111,7 +111,8 @@ https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985 (NS3-003,
 https://gitlab.com/nsnam/ns-3-dev/-/issues/1364) on GitLab at
 2026-11-22T19:30:43Z. The bridge itself still never closes anything
 upstream (guard 3). `tracked.toml` lists NS3-003 with `issue = 1364` and
-`competing = [3011]` only.
+`competing = [3011]` only (and, since 2026-11-22, `withdrawn = [2985]`;
+see Replies below).
 
 What this changes, and what it does not:
 
@@ -138,4 +139,8 @@ What this changes, and what it does not:
   ticket.
 - **Replies** (P4) post only on the item's own issue and merge requests;
   with no merge request of ours, that is the issue. A competing merge
-  request is never a thread we write to.
+  request is never a thread we write to. A withdrawn merge request of ours
+  stays a thread we answer in (`withdrawn = [2985]`, added 2026-11-22 so a
+  maintainer's question on the closed !2985 gets its reply there): read
+  mirrors its notes and send may post a reply file to them, but P5 never
+  maintains it and the writer refuses its rebase.
