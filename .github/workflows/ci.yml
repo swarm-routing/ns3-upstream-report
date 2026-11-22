@@ -119,10 +119,16 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           FORK: ${{ github.event.pull_request.head.repo.fork || false }}
+          # Dependabot's pull requests get no Actions secrets (#67)
+          DEPENDABOT: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
         run: |
           if [ -n "$SONAR_TOKEN" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$FORK" = true ]; then
             echo "::notice::SonarQube Cloud analysis skipped: a fork's pull request gets no SONAR_TOKEN"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$DEPENDABOT" = true ]; then
+            echo "::notice::SonarQube Cloud analysis skipped: a Dependabot pull request gets no SONAR_TOKEN"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "::error::SONAR_TOKEN is not available to this repository: the analysis cannot run"
