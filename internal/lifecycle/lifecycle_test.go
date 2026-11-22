@@ -213,3 +213,28 @@ func TestLifecycleClosedBy(t *testing.T) {
 		t.Error("P6: the release is said once")
 	}
 }
+
+// A withdrawn merge request is not one of ours to follow: closed, it is no fix; merged
+// (reopened and taken by ns-3), it counts only as the issue's closing merge request.
+func TestLifecycleWithdrawn(t *testing.T) {
+	m, _ := register.Parse(fake.RegisterWithdrawn())
+	m["item"] = m["item"].([]any)[:1]
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	gh := github.New("o/r", "t", fg.Transport, false)
+	sha := strings.Repeat("e", 40)
+	mr := fl.MR(2985)
+	mr["state"], mr["merge_commit_sha"] = "merged", sha
+	fl.SetMR(2985, mr)
+	fl.Data[fake.API+"/repository/commits/"+sha+"/refs?type=tag&per_page=100"] = []any{map[string]any{"type": "tag", "name": "ns-3.50"}}
+	mirror.CmdRead(cfg, gl, gh, now)
+	t3 := fg.Ticket("NS3-003")
+	if l, err := CmdLifecycle(cfg, gl, gh, nil, now); err != nil || l[0] != "nothing released" || len(released(fg, t3)) != 0 {
+		t.Errorf("P6: a withdrawn merge request outside the issue's closing list is not read as the fix: %v %v", l, err)
+	}
+	fl.Data[fake.API+"/issues/1364/closed_by?per_page=100"] = []any{mr}
+	if l, err := CmdLifecycle(cfg, gl, gh, nil, now); err != nil || l[0] != "NS3-003: fixed in ns-3.50" {
+		t.Errorf("P6: merged and closing the issue, it is the fix: %v %v", l, err)
+	}
+}

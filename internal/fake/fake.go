@@ -367,6 +367,12 @@ func (f *GitHub) Writes() []Call {
 	return out
 }
 
+// RegisterWithdrawn is Register with our merge request 2985 withdrawn
+// (`withdrawn = [2985]` in place of `merge_requests = [2985]`).
+func RegisterWithdrawn() string {
+	return strings.Replace(Register, "merge_requests = [2985]", "withdrawn = [2985]", 1)
+}
+
 // Register is the self-test's register: NS3-003 (published: issue 1364, our merge
 // request 2985, the competing 3011) and NS3-001 (a draft).
 const Register = `

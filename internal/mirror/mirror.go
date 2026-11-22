@@ -124,7 +124,7 @@ func Flags(cfg *register.Config, it *register.Item, states []state, now time.Tim
 				last = t
 			}
 		}
-		if s.ref.Kind == "!" {
+		if s.ref.Kind == "!" && !s.ref.Withdrawn { // a withdrawn merge request is never rebased or offered for review
 			dms := s.st["detailed_merge_status"]
 			if (dms != nil && py.Str(dms) == "need_rebase") || py.Truthy(s.st["has_conflicts"]) {
 				w := "conflicts"
@@ -165,7 +165,7 @@ func Flags(cfg *register.Config, it *register.Item, states []state, now time.Tim
 	}
 	var ms []int
 	for m := range mentioned {
-		if !it.HasMR(m) {
+		if !it.HasMR(m) && !it.IsWithdrawn(m) {
 			ms = append(ms, m)
 		}
 	}
@@ -198,6 +198,8 @@ func StatusBlock(cfg *register.Config, it *register.Item, states []state, flags 
 		role := ""
 		if !s.ref.Mirrored {
 			role = " (competing)"
+		} else if s.ref.Withdrawn {
+			role = " (withdrawn)"
 		}
 		var rv []string
 		if l, ok := st["reviewers"].([]any); ok {

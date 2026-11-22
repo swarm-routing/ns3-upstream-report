@@ -16,7 +16,7 @@ replies after the veto window; `verify.yml` (P1), `maintain.yml` (P5),
 https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/3011; our
 https://gitlab.com/nsnam/ns-3-dev/-/merge_requests/2985 was closed on
 2026-11-22, as the org authors no merge requests to ns-3 (ADR-0002
-amendment); RCAPA ticket
+amendment) and is listed as `withdrawn`, read and answered, never maintained; RCAPA ticket
 swarm-routing/ns3-tools#240), and the drafts NS3-001 (swarm-routing/ns3-containers#55,
 swarm-routing/ns3-tools#238) and NS3-002 (swarm-routing/ns3-tools#206,
 swarm-routing/ns3-tools#239), not filed yet (swarm-routing/.github#519).

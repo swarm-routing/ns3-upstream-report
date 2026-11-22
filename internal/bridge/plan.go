@@ -334,27 +334,33 @@ func RefInItem(it *register.Item, kind string, iid int) bool {
 	if kind == "#" {
 		return it.Issue == iid
 	}
-	return it.HasMR(iid)
+	return it.HasMR(iid) || it.IsWithdrawn(iid)
 }
 
-// Ref is a GitLab reference of an item: ours (mirrored) or a competing merge request.
+// Ref is a GitLab reference of an item: ours (mirrored; a withdrawn merge request
+// of ours too) or a competing merge request.
 type Ref struct {
-	Kind     string
-	IID      int
-	Mirrored bool
+	Kind      string
+	IID       int
+	Mirrored  bool
+	Withdrawn bool
 }
 
-// Refs is the item's GitLab references, ours first, then extra ones (sent from here).
+// Refs is the item's GitLab references, ours first (the issue, the live merge
+// requests, the withdrawn ones), then the competing ones, then extra ones (sent from here).
 func Refs(it *register.Item, extra [][2]any) []Ref {
 	var out []Ref
 	if it.Issue != 0 {
-		out = append(out, Ref{"#", it.Issue, true})
+		out = append(out, Ref{"#", it.Issue, true, false})
 	}
 	for _, i := range it.MergeRequests {
-		out = append(out, Ref{"!", i, true})
+		out = append(out, Ref{"!", i, true, false})
+	}
+	for _, i := range it.Withdrawn {
+		out = append(out, Ref{"!", i, true, true})
 	}
 	for _, i := range it.Competing {
-		out = append(out, Ref{"!", i, false})
+		out = append(out, Ref{"!", i, false, false})
 	}
 	for _, e := range extra {
 		k, i := e[0].(string), e[1].(int)
@@ -365,7 +371,7 @@ func Refs(it *register.Item, extra [][2]any) []Ref {
 			}
 		}
 		if !dup {
-			out = append(out, Ref{k, i, true})
+			out = append(out, Ref{k, i, true, false})
 		}
 	}
 	return out

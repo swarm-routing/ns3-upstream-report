@@ -18,12 +18,18 @@ import (
 	"github.com/swarm-routing/ns3-upstream-report/internal/register"
 )
 
-// Allow sets the threads of an item the writer may post to (its own issue and merge requests).
+// Allow sets the threads of an item the writer may post to (its own issue and merge
+// requests; a withdrawn merge request of ours takes notes, never a rebase).
 func Allow(gw *gitlabwrite.Client, it *register.Item) {
 	gw.Allowed = map[gitlabwrite.Thread]bool{}
+	gw.NotesOnly = map[gitlabwrite.Thread]bool{}
 	for _, r := range bridge.Refs(it, nil) {
 		if r.Mirrored {
-			gw.Allowed[gitlabwrite.Thread{Kind: r.Kind, IID: r.IID}] = true
+			th := gitlabwrite.Thread{Kind: r.Kind, IID: r.IID}
+			gw.Allowed[th] = true
+			if r.Withdrawn {
+				gw.NotesOnly[th] = true
+			}
 		}
 	}
 }
