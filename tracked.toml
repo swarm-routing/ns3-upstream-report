@@ -11,7 +11,10 @@ our_accounts = ["danieljoppi"]
 [[item]]
 id = "NS3-001"
 title = "AODV livelocks in a zero-time ICMP \"net unreachable\" storm"
-state = "draft"
+state = "published"
+issue = 1408
+# nsnam/ns-3-dev!3101 (not ours) adds the report's suggested guards to SendIcmpNoRoute (ticket #3)
+competing = [3101]
 rcapa = "swarm-routing/ns3-tools#238"
 draft = ["swarm-routing/ns3-containers#55"]
 # the issues that track this bug's workarounds (P6 opens one removal issue per entry)
@@ -27,7 +30,8 @@ expect = "exit 124"
 [[item]]
 id = "NS3-002"
 title = "AODV and DSDV order per-interface sockets by heap address"
-state = "draft"
+state = "published"
+issue = 1409
 rcapa = "swarm-routing/ns3-tools#239"
 draft = ["swarm-routing/ns3-tools#206"]
 
