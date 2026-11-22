@@ -96,6 +96,7 @@ func NewGitLab() *GitLab {
 		API + "/merge_requests/2985":                                          Load("mr-2985.json"),
 		API + "/merge_requests/2985/approvals":                                Load("mr-2985-approvals.json"),
 		API + "/merge_requests/3011":                                          Load("mr-3011.json"),
+		API + "/issues/1364/closed_by?per_page=100":                           []any{}, // synthetic (not recorded): no closing merge request
 		GitLabBase + "/nsnam/ns-3-dev/-/issues/1364/discussions.json":         Load("issue-1364-discussions.json"),
 		GitLabBase + "/nsnam/ns-3-dev/-/merge_requests/2985/discussions.json": Load("mr-2985-discussions.json"),
 		// the public page is cursor-paginated: its second page holds the newest notes
