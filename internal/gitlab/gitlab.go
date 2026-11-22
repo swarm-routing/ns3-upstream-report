@@ -9,6 +9,7 @@ package gitlab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -231,6 +232,24 @@ func (c *Client) CommitTags(sha string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// Contains says whether commit `tip`'s history holds commit `sha` (GitLab's
+// merge base of the two is `sha`); false for a commit GitLab does not know.
+func (c *Client) Contains(tip, sha string) (bool, error) {
+	if tip == sha {
+		return true, nil
+	}
+	v, err := c.Get(fmt.Sprintf("%s/repository/merge_base?refs%%5B%%5D=%s&refs%%5B%%5D=%s", c.API, sha, tip))
+	var he *httpx.Error
+	if errors.As(err, &he) && (he.Status == 404 || he.Status == 400) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	m, _ := v.(map[string]any)
+	return py.Str(m["id"]) == sha, nil
 }
 
 // ClosedBy is the merge requests that close an issue when they merge (GitLab's

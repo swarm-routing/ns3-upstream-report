@@ -4,7 +4,8 @@ name: lifecycle
 
 # P6 lifecycle (docs/adr/0002-a-zero-manual-pipeline-to-ns-3s-gitlab.md): daily,
 # when a merge request of ours is merged upstream and an ns-3 release tag
-# contains its commit (cmd/upstream lifecycle), say "fixed in ns-3.X" on the mirror ticket, open one
+# contains its commit (cmd/upstream lifecycle), and a P1 verify ran on a master
+# that contains it (else wait, said once on the ticket; #79), say "fixed in ns-3.X" on the mirror ticket, open one
 # issue per workaround the register lists, and close the RCAPA ticket once
 # all of them are closed (PROC-001). GitLab is read without a token; the
 # issues in other repositories need the org bot's token (BOT_APP_ID and
