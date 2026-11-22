@@ -50,6 +50,24 @@ func deps(t *testing.T, root, pkg string, seen map[string]bool) {
 // The single-token decision's compensation: read, lifecycle and verify are built
 // from packages with no GitLab write client compiled in; only send, maintain and
 // rotate import it.
+// TestWritersIgnoreCompeting: no GitLab write path names the competing merge
+// requests (P6 reads them; send's scope keeps only mirrored threads, #55).
+func TestWritersIgnoreCompeting(t *testing.T) {
+	root, _ := filepath.Abs("../..")
+	for _, p := range []string{"send", "maintain", "rotate", "gitlabwrite"} {
+		files, _ := filepath.Glob(filepath.Join(root, "internal", p, "*.go"))
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			src, _ := os.ReadFile(f)
+			if strings.Contains(string(src), "Competing") {
+				t.Errorf("%s names the competing merge requests", f)
+			}
+		}
+	}
+}
+
 func TestReadCannotWrite(t *testing.T) {
 	root, _ := filepath.Abs("../..")
 	writer := module + "internal/gitlabwrite"

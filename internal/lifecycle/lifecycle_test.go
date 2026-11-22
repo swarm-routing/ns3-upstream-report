@@ -119,3 +119,97 @@ func TestLifecycle(t *testing.T) {
 		}
 	}
 }
+
+// released is the ticket's upstream-released markers.
+func released(fg *fake.GitHub, n int) []string {
+	var out []string
+	for _, b := range fg.Bodies(n) {
+		if strings.HasPrefix(b, "<!-- upstream-released: ") {
+			out = append(out, strings.SplitN(b, "\n", 2)[0])
+		}
+	}
+	return out
+}
+
+func TestLifecycleCompeting(t *testing.T) {
+	m, _ := register.Parse(fake.Register)
+	m["item"] = m["item"].([]any)[:1]
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	gh := github.New("o/r", "t", fg.Transport, false)
+	mirror.CmdRead(cfg, gl, gh, now)
+	t3 := fg.Ticket("NS3-003")
+	run := func() []string {
+		t.Helper()
+		l, err := CmdLifecycle(cfg, gl, gh, nil, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	if l := run(); l[0] != "nothing released" || len(released(fg, t3)) != 0 {
+		t.Errorf("P6: the competing merge request still open, nothing released: %v", l)
+	}
+	sha := strings.Repeat("e", 40)
+	mr := fl.MR(3011)
+	mr["state"] = "closed"
+	fl.SetMR(3011, mr)
+	fl.Data[fake.API+"/repository/commits/"+sha+"/refs?type=tag&per_page=100"] = []any{
+		map[string]any{"type": "tag", "name": "ns-3.51"}, map[string]any{"type": "tag", "name": "ns-3.50"},
+	}
+	if l := run(); l[0] != "nothing released" || len(released(fg, t3)) != 0 {
+		t.Errorf("P6: the competing merge request closed unmerged, nothing released: %v", l)
+	}
+	mr["state"], mr["merge_commit_sha"] = "merged", sha
+	fl.SetMR(3011, mr)
+	l := run()
+	r := released(fg, t3)
+	if l[0] != "NS3-003: fixed in ns-3.50" || len(r) != 1 || r[0] != "<!-- upstream-released: ns-3.50 !3011 "+sha+" -->" {
+		t.Errorf("P6: a merged competing merge request in a release tag is the fix: %v %v", l, r)
+	}
+	if b := fg.Bodies(t3); !strings.Contains(b[len(b)-1], "(competing)") {
+		t.Errorf("P6: the comment says the fix is a competing merge request: %q", b[len(b)-1])
+	}
+	run()
+	if len(released(fg, t3)) != 1 {
+		t.Error("P6: the release is said once")
+	}
+	for _, c := range fl.Calls {
+		if c.Method != "GET" {
+			t.Errorf("lifecycle sends only GET to GitLab: %s %s", c.Method, c.URL)
+		}
+	}
+}
+
+func TestLifecycleClosedBy(t *testing.T) {
+	m, _ := register.Parse(fake.Register)
+	m["item"] = m["item"].([]any)[:1]
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	gh := github.New("o/r", "t", fg.Transport, false)
+	mirror.CmdRead(cfg, gl, gh, now)
+	t3 := fg.Ticket("NS3-003")
+	sha := strings.Repeat("f", 40)
+	closedBy := fake.API + "/issues/1364/closed_by?per_page=100"
+	fl.Data[closedBy] = []any{map[string]any{"iid": 3050, "state": "merged", "merge_commit_sha": nil, "squash_commit_sha": sha}}
+	tagsOf := fake.API + "/repository/commits/" + sha + "/refs?type=tag&per_page=100"
+	fl.Data[tagsOf] = []any{}
+	if l, err := CmdLifecycle(cfg, gl, gh, nil, now); err != nil || l[0] != "nothing released" {
+		t.Errorf("P6: merged but in no release tag yet, nothing released: %v %v", l, err)
+	}
+	fl.Data[tagsOf] = []any{map[string]any{"type": "tag", "name": "ns-3-dev-snapshot"}, map[string]any{"type": "tag", "name": "ns-3.52"}}
+	l, err := CmdLifecycle(cfg, gl, gh, nil, now)
+	r := released(fg, t3)
+	if err != nil || l[0] != "NS3-003: fixed in ns-3.52" || len(r) != 1 || r[0] != "<!-- upstream-released: ns-3.52 !3050 "+sha+" -->" {
+		t.Errorf("P6: the merge request that closed the issue, not listed, is the fix: %v %v %v", l, r, err)
+	}
+	if b := fg.Bodies(t3); !strings.Contains(b[len(b)-1], "which closed [nsnam/ns-3-dev#1364](https://gitlab.com/nsnam/ns-3-dev/-/issues/1364)") {
+		t.Errorf("P6: the comment says the merge request closed the issue: %q", b[len(b)-1])
+	}
+	CmdLifecycle(cfg, gl, gh, nil, now)
+	if len(released(fg, t3)) != 1 {
+		t.Error("P6: the release is said once")
+	}
+}

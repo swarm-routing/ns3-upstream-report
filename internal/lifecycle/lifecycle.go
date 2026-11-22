@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
-// Package lifecycle is P6: a merged merge request of ours whose commit an ns-3
-// release tag contains sets "fixed in ns-3.X" on the ticket and opens one issue per
+// Package lifecycle is P6: a merged merge request (ours, a competing one, or one
+// that closed the item's GitLab issue) whose commit an ns-3 release tag contains sets "fixed in ns-3.X" on the ticket and opens one issue per
 // workaround (with the org bot's token); once every one of them is closed, the RCAPA
 // ticket is closed. It reads GitLab only.
 package lifecycle
@@ -42,6 +42,54 @@ func less(a, b []int) bool {
 	return len(a) < len(b)
 }
 
+// candidate is a merge request that may be the item's fix.
+type candidate struct {
+	iid  int
+	role string // "ours", "competing" or "closed_by"
+	st   map[string]any
+}
+
+// candidates is every merge request that may be the item's fix: ours, then the
+// competing ones, then any other that closes the item's GitLab issue on merge
+// (GitLab's closed_by list), each once. They are only read: P5 and the replies
+// follow ours alone.
+func candidates(gl *gitlab.Client, it *register.Item) ([]candidate, error) {
+	var out []candidate
+	seen := map[int]bool{}
+	for _, l := range []struct {
+		role string
+		iids []int
+	}{{"ours", it.MergeRequests}, {"competing", it.Competing}} {
+		for _, mr := range l.iids {
+			if seen[mr] {
+				continue
+			}
+			seen[mr] = true
+			st, err := gl.Item("!", mr)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, candidate{mr, l.role, st})
+		}
+	}
+	if it.Issue == 0 {
+		return out, nil
+	}
+	closing, err := gl.ClosedBy(it.Issue)
+	if err != nil {
+		return nil, err
+	}
+	for _, st := range closing {
+		mr, _ := strconv.Atoi(py.Str(st["iid"]))
+		if mr == 0 || seen[mr] {
+			continue
+		}
+		seen[mr] = true
+		out = append(out, candidate{mr, "closed_by", st})
+	}
+	return out, nil
+}
+
 // CmdLifecycle runs P6; org is a client for other repositories (nil: it says what waits for the token).
 func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Client, now time.Time) ([]string, error) {
 	issues, err := gh.Issues()
@@ -69,11 +117,12 @@ func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Clien
 			}
 		}
 		if released == "" {
-			for _, mr := range it.MergeRequests {
-				st, err := gl.Item("!", mr)
-				if err != nil {
-					return nil, err
-				}
+			cands, err := candidates(gl, it)
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range cands {
+				st := c.st
 				sha := ""
 				if py.Truthy(st["merge_commit_sha"]) {
 					sha = py.Str(st["merge_commit_sha"])
@@ -95,9 +144,17 @@ func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Clien
 				}
 				sort.SliceStable(tags, func(a, b int) bool { return less(tagKey(tags[a]), tagKey(tags[b])) })
 				if len(tags) > 0 {
+					mr := c.iid
+					role := ""
+					switch c.role {
+					case "competing":
+						role = " (competing)"
+					case "closed_by":
+						role = fmt.Sprintf(", which closed [%s#%d](%s),", cfg.GitLabProject, it.Issue, gitlab.WebURL(cfg.GitLabProject, "#", it.Issue))
+					}
 					released = fmt.Sprintf("%s !%d %s", tags[0], mr, sha)
-					if _, err := gh.AddComment(tn, fmt.Sprintf("<!-- upstream-released: %s -->\n**Fixed in %s**: [!%d](%s) merged as `%s`, which the release tag contains.%s",
-						released, tags[0], mr, gitlab.WebURL(cfg.GitLabProject, "!", mr), py.Head(sha, 12), bridge.Footer)); err != nil {
+					if _, err := gh.AddComment(tn, fmt.Sprintf("<!-- upstream-released: %s -->\n**Fixed in %s**: [!%d](%s)%s merged as `%s`, which the release tag contains.%s",
+						released, tags[0], mr, gitlab.WebURL(cfg.GitLabProject, "!", mr), role, py.Head(sha, 12), bridge.Footer)); err != nil {
 						return nil, err
 					}
 					lines = append(lines, fmt.Sprintf("%s: fixed in %s", it.ID, tags[0]))

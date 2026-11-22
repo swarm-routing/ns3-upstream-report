@@ -233,6 +233,23 @@ func (c *Client) CommitTags(sha string) ([]string, error) {
 	return out, nil
 }
 
+// ClosedBy is the merge requests that close an issue when they merge (GitLab's
+// closed_by list, any state).
+func (c *Client) ClosedBy(iid int) ([]map[string]any, error) {
+	v, err := c.Get(fmt.Sprintf("%s/issues/%d/closed_by?per_page=100", c.API, iid))
+	if err != nil {
+		return nil, err
+	}
+	l, _ := v.([]any)
+	var out []map[string]any
+	for _, x := range l {
+		if m, ok := x.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 // TokenSelf is GET /personal_access_tokens/self: the token's created_at, expires_at, scopes.
 func (c *Client) TokenSelf() (map[string]any, error) {
 	v, err := c.Get(c.Base + "/api/v4/personal_access_tokens/self")
