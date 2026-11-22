@@ -12,12 +12,12 @@
 //	upstream verify-matrix [--tracked FILE]
 //	upstream verify        [--tracked FILE] ITEM --ns3 DIR   P1
 //	upstream verify-record [--tracked FILE] --results DIR --run-url URL [--dry-run] [--now ISO-8601]
-//	upstream lifecycle     [--tracked FILE] [--dry-run] [--now ISO-8601]   P6
+//	upstream lifecycle     [--tracked FILE] [--dry-run] [--now ISO-8601]   P6, and the register pull request after P3
 //	upstream maintain      [--tracked FILE] [--root DIR] [--dry-run] [--now ISO-8601]   P5
 //	upstream rotate        [--tracked FILE] [--dry-run] [--now ISO-8601]   P7
 //
 // GitHub is reached with GITHUB_TOKEN (the workflow's, issues: write), other
-// repositories with BOT_TOKEN (the org App: P6's issues, P5's pull requests), the
+// repositories with BOT_TOKEN (the org App: P6's issues, P5's and the register's pull requests), the
 // environment secrets with APP_TOKEN (the org App, P7), and GitLab with GITLAB_TOKEN
 // (scope `api`, in both environments). No token is ever printed, logged or put in a
 // URL. read, lifecycle and verify only read GitLab: the write client
@@ -44,6 +44,7 @@ import (
 	"github.com/swarm-routing/ns3-upstream-report/internal/maintain"
 	"github.com/swarm-routing/ns3-upstream-report/internal/mirror"
 	"github.com/swarm-routing/ns3-upstream-report/internal/py"
+	"github.com/swarm-routing/ns3-upstream-report/internal/record"
 	"github.com/swarm-routing/ns3-upstream-report/internal/register"
 	"github.com/swarm-routing/ns3-upstream-report/internal/rotate"
 	"github.com/swarm-routing/ns3-upstream-report/internal/send"
@@ -323,6 +324,11 @@ func runErr(args []string, e env) error {
 		if lines, err = lifecycle.CmdLifecycle(cfg, gl, gh, org, now); err != nil {
 			return err
 		}
+		more, err := record.CmdRecord(cfg, gh, org)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, more...)
 	case "maintain":
 		var bot *github.Client
 		if t := e.Getenv("BOT_TOKEN"); t != "" {
