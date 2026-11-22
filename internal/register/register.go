@@ -328,7 +328,7 @@ func Validate(cfg map[string]any) []string {
 		if !validVerified(getd(it, "verified", map[string]any{})) {
 			errors = append(errors, where+": verified is not { date = YYYY-MM-DD, master, run = URL }")
 		}
-		if it["state"] == "published" && !(py.Truthy(it["issue"]) || py.Truthy(it["merge_requests"])) {
+		if it["state"] == "published" && !(py.Truthy(it["issue"]) || py.Truthy(it["merge_requests"]) || py.Truthy(it["withdrawn"])) {
 			errors = append(errors, where+": published without an issue or a merge request")
 		}
 	}

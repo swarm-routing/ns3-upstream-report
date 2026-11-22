@@ -133,6 +133,15 @@ func TestWithdrawn(t *testing.T) {
 			t.Errorf("register refused: %s: %v", c.name, errs)
 		}
 	}
+	only := copyItem(first)
+	delete(only, "issue")
+	if errs := Validate(withItem(m, only)); len(errs) != 0 {
+		t.Errorf("a published item whose only GitLab reference is a withdrawn MR is valid: %v", errs)
+	}
+	delete(only, "withdrawn")
+	if errs := Validate(withItem(m, only)); !anyContains(errs, "published without") {
+		t.Errorf("a published item with no issue, live or withdrawn MR is refused: %v", errs)
+	}
 }
 
 func TestLoadRefusesAnInvalidRegister(t *testing.T) {
