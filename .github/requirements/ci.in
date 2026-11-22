@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Daniel Joppi (https://github.com/swarm-routing)
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# What ci.yml's actionlint step installs with pip (shellcheck, which
+# actionlint runs on every run: block). ci.txt is the lock it installs with
+# --require-hashes (OpenSSF Scorecard Pinned-Dependencies,
+# swarm-routing/.github#716); regenerate:
+#   uv pip compile --universal --generate-hashes --no-header .github/requirements/ci.in -o .github/requirements/ci.txt
+shellcheck-py==0.10.0.1
