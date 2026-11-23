@@ -26,6 +26,8 @@ import (
 
 var releaseTag = regexp.MustCompile(`^ns-3\.[0-9]+(?:\.[0-9]+)?$`)
 
+var fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 func tagKey(n string) []int {
 	var out []int
 	for _, p := range strings.Split(n[5:], ".") {
@@ -96,23 +98,12 @@ func candidates(gl *gitlab.Client, it *register.Item) ([]candidate, error) {
 // tracked.toml's `verified = { date, master, run }`, or a verify workflow's
 // `upstream-verified` marker on the ticket, whatever its result; nil if none (#79).
 func verifiedWith(gl *gitlab.Client, cfg *register.Config, it *register.Item, comments []map[string]any, sha string) (map[string]string, error) {
+	// only a full commit counts: a branch name (or a short id) would resolve to
+	// whatever it names today, not to the commit P1 ran on
 	var recs []map[string]string
-	if it.Verified["master"] != "" {
-		recs = append(recs, it.Verified)
-	}
-	for _, c := range comments {
-		v, ok := bridge.BotMarker(cfg, c, "upstream-verified")
-		if !ok || v == "" {
-			continue
-		}
-		got := map[string]string{}
-		for _, x := range strings.FieldsFunc(v, py.IsSpace) {
-			if k, val, ok := strings.Cut(x, "="); ok {
-				got[k] = val
-			}
-		}
-		if got["master"] != "" {
-			recs = append(recs, got)
+	for _, r := range append([]map[string]string{it.Verified}, bridge.VerifyMarkers(cfg, comments)...) {
+		if fullCommit.MatchString(r["master"]) {
+			recs = append(recs, r)
 		}
 	}
 	sort.SliceStable(recs, func(a, b int) bool { return recs[a]["date"] > recs[b]["date"] })
@@ -126,6 +117,14 @@ func verifiedWith(gl *gitlab.Client, cfg *register.Config, it *register.Item, co
 		}
 	}
 	return nil, nil
+}
+
+// waiting is a released fix that waits for its P1 verify.
+type waiting struct {
+	fix, tag string
+	mr       int
+	role     string
+	sha      string
 }
 
 // verifyResult is a verify record's result in words (tracked.toml's carries none).
@@ -172,6 +171,7 @@ func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Clien
 			if err != nil {
 				return nil, err
 			}
+			var wait *waiting // the first released candidate with no verify yet
 			for _, c := range cands {
 				st := c.st
 				sha := ""
@@ -210,21 +210,12 @@ func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Clien
 					}
 					if rec == nil {
 						// a release tag can lag the merge; P6 acts only once P1 has run
-						// on a master that holds the fix (#55, #79)
-						said := false
-						for _, cm := range comments {
-							if v, ok := bridge.BotMarker(cfg, cm, "upstream-release-waits"); ok && v == fix {
-								said = true
-							}
+						// on a master that holds the fix (#55, #79). Another candidate
+						// may have its verify: the wait is said only if none has.
+						if wait == nil {
+							wait = &waiting{fix, tags[0], mr, role, sha}
 						}
-						if !said {
-							if _, err := gh.AddComment(tn, fmt.Sprintf("<!-- upstream-release-waits: %s -->\n**Released in %s, waiting for P1 verify**: [!%d](%s)%s merged as `%s`, which the release tag contains. It is marked fixed once a P1 verify has run on an ns-3-dev `master` that contains that commit (the weekly `verify.yml`, or its dispatch).%s",
-								fix, tags[0], mr, gitlab.WebURL(cfg.GitLabProject, "!", mr), role, py.Head(sha, 12), bridge.Footer)); err != nil {
-								return nil, err
-							}
-						}
-						lines = append(lines, fmt.Sprintf("%s: in %s (!%d), waits for a P1 verify on a master containing %s", it.ID, tags[0], mr, py.Head(sha, 12)))
-						break
+						continue
 					}
 					released = fix
 					if _, err := gh.AddComment(tn, fmt.Sprintf("<!-- upstream-released: %s -->\n**Fixed in %s**: [!%d](%s)%s merged as `%s`, which the release tag contains. P1 verify on `master` `%s` (%s): %s.%s",
@@ -235,6 +226,21 @@ func CmdLifecycle(cfg *register.Config, gl *gitlab.Client, gh, org *github.Clien
 					lines = append(lines, fmt.Sprintf("%s: fixed in %s", it.ID, tags[0]))
 					break
 				}
+			}
+			if released == "" && wait != nil {
+				said := false
+				for _, cm := range comments {
+					if v, ok := bridge.BotMarker(cfg, cm, "upstream-release-waits"); ok && v == wait.fix {
+						said = true
+					}
+				}
+				if !said {
+					if _, err := gh.AddComment(tn, fmt.Sprintf("<!-- upstream-release-waits: %s -->\n**Released in %s, waiting for P1 verify**: [!%d](%s)%s merged as `%s`, which the release tag contains. It is marked fixed once a P1 verify has run on an ns-3-dev `master` that contains that commit (the weekly `verify.yml`, or its dispatch).%s",
+						wait.fix, wait.tag, wait.mr, gitlab.WebURL(cfg.GitLabProject, "!", wait.mr), wait.role, py.Head(wait.sha, 12), bridge.Footer)); err != nil {
+						return nil, err
+					}
+				}
+				lines = append(lines, fmt.Sprintf("%s: in %s (!%d), waits for a P1 verify on a master containing %s", it.ID, wait.tag, wait.mr, py.Head(wait.sha, 12)))
 			}
 		}
 		if released == "" {

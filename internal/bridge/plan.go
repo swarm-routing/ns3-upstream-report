@@ -101,6 +101,18 @@ func Evidence(cfg *register.Config, it *register.Item, comments []map[string]any
 	for k, v := range it.Verified {
 		best[k] = v
 	}
+	for _, got := range VerifyMarkers(cfg, comments) {
+		if got["result"] == "reproduces" && got["date"] > best["date"] {
+			best = got
+		}
+	}
+	return best
+}
+
+// VerifyMarkers is every `upstream-verified` marker the verify workflow's bot left
+// on a ticket, its key=value fields (date, master, run, result), in comment order.
+func VerifyMarkers(cfg *register.Config, comments []map[string]any) []map[string]string {
+	var out []map[string]string
 	for _, c := range comments {
 		v, ok := BotMarker(cfg, c, "upstream-verified")
 		if !ok || v == "" {
@@ -112,11 +124,9 @@ func Evidence(cfg *register.Config, it *register.Item, comments []map[string]any
 				got[k] = val
 			}
 		}
-		if got["result"] == "reproduces" && got["date"] > best["date"] {
-			best = got
-		}
+		out = append(out, got)
 	}
-	return best
+	return out
 }
 
 // ReadFile is a file of the repository at base, refused outside it; ok=false if missing.

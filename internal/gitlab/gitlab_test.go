@@ -12,6 +12,45 @@ import (
 	"github.com/swarm-routing/ns3-upstream-report/internal/httpx"
 )
 
+func TestContains(t *testing.T) {
+	fix, tip := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	var urls []string
+	reply := func(status int, raw string) httpx.Transport {
+		return func(method, url string, _ map[string]string, _ any) (httpx.Response, error) {
+			urls = append(urls, method+" "+url)
+			if status != 200 {
+				return httpx.Response{}, &httpx.Error{Method: method, URL: url, Status: status, Message: "x"}
+			}
+			return httpx.Response{Status: 200, Raw: []byte(raw)}, nil
+		}
+	}
+	for _, c := range []struct {
+		status int
+		raw    string
+		want   bool
+		fails  bool
+	}{
+		{200, `{"id": "` + fix + `"}`, true, false},
+		{200, `{"id": "` + strings.Repeat("c", 40) + `"}`, false, false},
+		{404, "", false, false},
+		{400, "", false, false},
+		{500, "", false, true},
+	} {
+		got, err := New("nsnam/ns-3-dev", "", reply(c.status, c.raw)).Contains(tip, fix)
+		if got != c.want || (err != nil) != c.fails {
+			t.Errorf("Contains with HTTP %d %s: %v %v", c.status, c.raw, got, err)
+		}
+	}
+	want := "GET " + New("nsnam/ns-3-dev", "", nil).API + "/repository/merge_base?refs%5B%5D=" + fix + "&refs%5B%5D=" + tip
+	if urls[0] != want {
+		t.Errorf("the merge base of the fix and the tip, by GET: %s", urls[0])
+	}
+	n := len(urls)
+	if ok, err := New("nsnam/ns-3-dev", "", reply(500, "")).Contains(fix, fix); !ok || err != nil || len(urls) != n {
+		t.Error("a commit contains itself, with no request")
+	}
+}
+
 func TestNotesPaging(t *testing.T) {
 	var methods []string
 	tr := func(method, url string, h map[string]string, _ any) (httpx.Response, error) {

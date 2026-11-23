@@ -201,6 +201,36 @@ func TestLifecycleWaitsForVerify(t *testing.T) {
 	}
 }
 
+// Our released fix has no verify yet, but a competing one in the release has: P6
+// releases through it, and says no wait; a verify naming a branch counts for none.
+func TestLifecycleOtherCandidateVerified(t *testing.T) {
+	m, _ := register.Parse(fake.Register)
+	m["item"] = m["item"].([]any)[:1]
+	cfg := register.FromRaw(m)
+	fl, fg := fake.NewGitLab(), fake.NewGitHub()
+	gl := gitlab.New("nsnam/ns-3-dev", "", fl.Transport)
+	gh := github.New("o/r", "t", fg.Transport, false)
+	ours, theirs := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for mr, sha := range map[int]string{2985: ours, 3011: theirs} {
+		st := fl.MR(mr)
+		st["state"], st["merge_commit_sha"] = "merged", sha
+		fl.SetMR(mr, st)
+		fl.Data[fake.API+"/repository/commits/"+sha+"/refs?type=tag&per_page=100"] = []any{map[string]any{"type": "tag", "name": "ns-3.50"}}
+	}
+	mirror.CmdRead(cfg, gl, gh, now)
+	t3 := fg.Ticket("NS3-003")
+	verifiedOn(fg, t3, "2026-11-18", "master", "not-reproduced")
+	if l, err := CmdLifecycle(cfg, gl, gh, nil, now); err != nil || len(released(fg, t3)) != 0 || !strings.Contains(l[0], "(!2985), waits") {
+		t.Errorf("P6: a verify that names a branch is no evidence: %v %v", l, err)
+	}
+	verifiedOn(fg, t3, "2026-11-17", theirs, "not-reproduced")
+	l, err := CmdLifecycle(cfg, gl, gh, nil, now)
+	r := released(fg, t3)
+	if err != nil || l[0] != "NS3-003: fixed in ns-3.50" || len(r) != 1 || r[0] != "<!-- upstream-released: ns-3.50 !3011 "+theirs+" -->" {
+		t.Errorf("P6: the competing fix with its verify is released, not left waiting behind ours: %v %v %v", l, r, err)
+	}
+}
+
 // released is the ticket's upstream-released markers.
 func released(fg *fake.GitHub, n int) []string {
 	var out []string
