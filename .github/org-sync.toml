@@ -57,12 +57,12 @@ image = "https://img.shields.io/badge/go-1.27-blue?logo=go"
 link = "go.mod"
 
 [docs]
-arena_id = ""  # its id in swarm-routing.github.io site/hub/projects.json, once listed
+arena_id = "ns3-upstream-report"  # its id in swarm-routing.github.io site/hub/projects.json (swarm-routing/swarm-routing.github.io#312)
 
 [settings]
 # GitHub settings as code: swarm-routing/.github tools/repo-settings (swarm-routing/.github#117).
 description = "The swarm-routing org's bridge to ns-3's GitLab: a mirror ticket and a zero-manual pipeline per upstream ns-3 bug report, from draft and verification to publishing, replies, MR upkeep and the release that fixes it."
-homepage = ""
+homepage = "https://swarm-routing.github.io/projects/ns3-upstream-report/"
 topics = ["ns-3", "gitlab", "issue-tracking", "automation", "swarm-intelligence"]
 ruleset = "tooling"
 required_checks = ["go / go", "workflows", "headers / licence", "check / org-sync", "title / title", "review / coderabbit"]
