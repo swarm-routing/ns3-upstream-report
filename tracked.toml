@@ -55,3 +55,18 @@ issue = 1364
 # while P5 never rebases it or asks for review, and P6 counts it only as the issue's closing merge request.
 withdrawn = [2985]
 competing = [3011]
+
+[[item]]
+id = "NS3-005"
+title = "aodv: route lifetime overflows int64 when an interface comes up after t=0"
+state = "draft"
+rcapa = "swarm-routing/sim-tools#374"
+
+# P1 verify: the reproducer of swarm-routing/sim-tools#374 (two CSMA nodes, node 1's interface down at 1 s, up at 35 s)
+# is rebuilt with the sanitizers (verify configures without them; the overflow is silent undefined behaviour otherwise)
+# and UBSan reports the signed overflow when ns-3-dev master still has the unchecked add
+[item.reproduce]
+modules = "core;network;internet;csma;aodv"
+files = { "scratch/aodv-lifetime-overflow.cc" = "https://raw.githubusercontent.com/swarm-routing/sim-tools/1b36c739e0374295fc961772c044ecf90fb1b619/ns3/patches/NS3-005/aodv-lifetime-overflow.cc" }
+run = "./ns3 configure -d debug --enable-sanitizers --disable-werror --enable-modules='core;network;internet;csma;aodv' && ./ns3 build scratch/aodv-lifetime-overflow && ./ns3 run --no-build scratch/aodv-lifetime-overflow"
+expect = "output signed integer overflow: 9223372036854775807"
