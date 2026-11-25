@@ -57,6 +57,21 @@ withdrawn = [2985]
 competing = [3011]
 
 [[item]]
+id = "NS3-004"
+title = "aodv: hello timer is never restarted when an interface comes back up"
+state = "draft"
+rcapa = "swarm-routing/sim-tools#362"
+draft = ["swarm-routing/sim-tools#362"]
+
+# P1 verify: the reproducer of swarm-routing/sim-tools#362 (three wifi nodes, node 1's interfaces down at 10 s, up at 15 s)
+# prints `VERDICT reproduced` when the restarted node sends no HELLO after 15 s
+[item.reproduce]
+modules = "core;network;internet;wifi;mobility;applications;aodv"
+files = { "scratch/aodv-hello-restart.cc" = "https://raw.githubusercontent.com/swarm-routing/sim-tools/f968693710a761cab6a99e05e16a3c8b63cc3867/docs/ns3-rcapa/aodv-hello-restart.cc" }
+run = "./ns3 run --no-build scratch/aodv-hello-restart"
+expect = "output VERDICT reproduced"
+
+[[item]]
 id = "NS3-005"
 title = "aodv: route lifetime overflows int64 when an interface comes up after t=0"
 state = "draft"
