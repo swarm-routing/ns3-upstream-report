@@ -62,6 +62,8 @@ title = "aodv: hello timer is never restarted when an interface comes back up"
 state = "draft"
 rcapa = "swarm-routing/sim-tools#362"
 draft = ["swarm-routing/sim-tools#362"]
+# no veto window: posted as soon as it is scheduled after a passing P1 verify (maintainer decision 2026-11-25)
+gate = "approve"
 
 # P1 verify: the reproducer of swarm-routing/sim-tools#362 (three wifi nodes, node 1's interfaces down at 10 s, up at 15 s)
 # prints `VERDICT reproduced` when the restarted node sends no HELLO after 15 s
@@ -76,6 +78,8 @@ id = "NS3-005"
 title = "aodv: route lifetime overflows int64 when an interface comes up after t=0"
 state = "draft"
 rcapa = "swarm-routing/sim-tools#374"
+# no veto window: posted as soon as it is scheduled after a passing P1 verify (maintainer decision 2026-11-25)
+gate = "approve"
 
 # P1 verify: the reproducer of swarm-routing/sim-tools#374 (two CSMA nodes, node 1's interface down at 1 s, up at 35 s)
 # is rebuilt with the sanitizers (verify configures without them; the overflow is silent undefined behaviour otherwise)
