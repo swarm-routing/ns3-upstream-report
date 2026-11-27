@@ -59,7 +59,8 @@ competing = [3011]
 [[item]]
 id = "NS3-004"
 title = "aodv: hello timer is never restarted when an interface comes back up"
-state = "draft"
+state = "published"
+issue = 1418
 rcapa = "swarm-routing/sim-tools#362"
 draft = ["swarm-routing/sim-tools#362"]
 # no veto window: posted as soon as it is scheduled after a passing P1 verify (maintainer decision 2026-11-25)
